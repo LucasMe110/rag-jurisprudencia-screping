@@ -1,3 +1,5 @@
+import calendar
+import time
 import requests
 from bs4 import BeautifulSoup
 
@@ -62,6 +64,59 @@ def parse_results_page(html: str) -> list[dict]:
         })
 
     return items
+
+
+def scrape_month(
+    year: int,
+    month: int,
+    sleep: float = 1.0,
+    failed_pages: list | None = None,
+) -> list[dict]:
+    _, last_day = calendar.monthrange(year, month)
+    date_start = f"01/{month:02d}/{year}"
+    date_end = f"{last_day:02d}/{month:02d}/{year}"
+    month_str = f"{year}-{month:02d}"
+
+    session = requests.Session()
+    records: list[dict] = []
+    consecutive_no_results = 0
+    page = 1
+
+    while consecutive_no_results < 3:
+        html = None
+        last_error: Exception | None = None
+
+        for attempt in range(3):
+            try:
+                html = fetch_page(session, page, date_start, date_end)
+                last_error = None
+                break
+            except Exception as exc:
+                last_error = exc
+                if attempt < 2:
+                    time.sleep(2 ** attempt)
+
+        if last_error is not None:
+            if failed_pages is not None:
+                failed_pages.append(
+                    {"month": month_str, "page": page, "error": str(last_error)}
+                )
+            consecutive_no_results += 1
+            page += 1
+            continue
+
+        items = parse_results_page(html)
+        if items:
+            consecutive_no_results = 0
+            records.extend(items)
+        else:
+            consecutive_no_results += 1
+
+        page += 1
+        if sleep > 0:
+            time.sleep(sleep)
+
+    return records
 
 
 def fetch_page(session: requests.Session, page: int, date_start: str = "", date_end: str = "") -> str:
