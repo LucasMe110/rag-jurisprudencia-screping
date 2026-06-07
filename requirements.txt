@@ -1,0 +1,7 @@
+requests
+beautifulsoup4
+sentence-transformers
+google-cloud-bigquery
+torch
+numpy
+pytest

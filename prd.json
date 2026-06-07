@@ -1,0 +1,84 @@
+{
+  "project": "Scraper TJSC — Coleta Histórica em Lotes Noturnos",
+  "branchName": "ralph/scraper-batch-nightly",
+  "description": "Refatorar o scraper do TJSC para coletar jurisprudência histórica (2018 → presente) em lotes mensais noturnos via GitHub Actions. Cada execução processa 1 mês, gera embeddings com multilingual-e5-base e insere diretamente no BigQuery processos_v2. Progresso salvo em checkpoint.json commitado no repo.",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Setup: requirements.txt e testes de parsing HTML",
+      "description": "Criar requirements.txt com todas as dependências e escrever testes para a lógica de parsing HTML que já existe em main.py.",
+      "priority": 1,
+      "passes": true,
+      "acceptanceCriteria": [
+        "requirements.txt criado com: requests, beautifulsoup4, sentence-transformers, google-cloud-bigquery, torch, numpy, pytest",
+        "Criar tests/__init__.py e tests/test_scraper.py",
+        "test_scraper.py testa parse_results_page() com HTML mockado contendo 2 cards de resultadoItem — verifica campos processo, orgao_julgador, data_julgamento, data_publicacao, relator, decisao",
+        "test_scraper.py testa parse_results_page() com HTML vazio — deve retornar lista vazia",
+        "test_scraper.py testa extract_processo() com card que tem a tag <a class='numero-processo'> e com card que não tem (fallback para campo PROCESSO)",
+        "pytest tests/ -v passa sem erros"
+      ],
+      "notes": "A lógica de parsing já existe em screping/main.py — extrair para screping/scraper.py mantendo as mesmas funções. Os testes devem usar HTML mockado (string literal), sem fazer requests reais. Ver CLAUDE.md para estrutura de arquivos esperada."
+    },
+    {
+      "id": "US-002",
+      "title": "Scraping por faixa de data com checkpoint e retry",
+      "description": "Refatorar o scraper para aceitar faixa de datas (mês/ano), adicionar retry com backoff e criar sistema de checkpoint em JSON.",
+      "priority": 2,
+      "passes": false,
+      "acceptanceCriteria": [
+        "Criar screping/scraper.py com função scrape_month(year: int, month: int, sleep: float = 1.0) -> list[dict] que raspa todas as páginas de um mês",
+        "fetch_page() passa dtDecisaoInicio e dtDecisaoFim no payload (ex: '01/01/2018' e '31/01/2018' para janeiro 2018)",
+        "Se página retorna 0 itens por 3 páginas consecutivas: encerra o mês (não há mais dados)",
+        "Cada página tem retry de até 3 tentativas com sleep 2^attempt segundos entre tentativas",
+        "Página que falha após 3 tentativas é registrada como failed_page e pulada (não aborta o mês inteiro)",
+        "Criar screping/checkpoint.py com funções load_checkpoint() e save_checkpoint(data) que lêem/gravam checkpoint.json na raiz do repo",
+        "checkpoint.json tem campos: next_month (str YYYY-MM), completed_months (list), failed_pages (list)",
+        "Se checkpoint.json não existe, load_checkpoint() retorna next_month='2018-01'",
+        "Criar tests/test_scraper.py (ou adicionar a ele) testes para scrape_month() com requests mockado",
+        "Criar tests/test_checkpoint.py com testes de load/save (usando tmp_path do pytest)",
+        "pytest tests/ -v passa"
+      ],
+      "notes": "Formato das datas no payload TJSC: dd/mm/YYYY (ex: '01/01/2018'). Ver payload original em screping/main.py — os campos dtDecisaoInicio e dtDecisaoFim já existem mas estão vazios. O campo selOrdenacao='1' mantém. Usar calendar.monthrange para calcular último dia do mês. checkpoint.json fica na raiz do repo (um nível acima de screping/)."
+    },
+    {
+      "id": "US-003",
+      "title": "Embedding e inserção direta no BigQuery",
+      "description": "Criar módulos para geração de embeddings com multilingual-e5-base e inserção dos registros com embeddings no BigQuery processos_v2.",
+      "priority": 3,
+      "passes": false,
+      "acceptanceCriteria": [
+        "Criar screping/embedder.py com função generate_embeddings(records: list[dict]) -> list[dict] que adiciona campo 'embedding' (list[float], 768 dims) em cada record",
+        "Prefixo de encoding: f\"passage: {record['decisao'] or ''}\" — igual ao reindex.py do app",
+        "normalize_embeddings=True, batch_size=256",
+        "Criar screping/bq_writer.py com função insert_records(records: list[dict], project_id: str, dataset_id: str, table_id: str) -> int que retorna número de erros",
+        "ID de cada registro: hashlib.sha256(f\"{processo}|{data_julgamento}\".encode()).hexdigest()",
+        "Inserção em chunks de 256 com retry 3x (sleep 5s entre tentativas) — igual ao padrão de reindex.py",
+        "Criar screping/main.py novo que orquestra: load_checkpoint → scrape_month → generate_embeddings → insert_records → save_checkpoint",
+        "main.py para se next_month > mês atual (coleta completa)",
+        "Criar tests/test_embedder.py mockando SentenceTransformer.encode — verifica que prefixo 'passage: ' é aplicado e que embedding é adicionado ao dict",
+        "Criar tests/test_bq_writer.py mockando google.cloud.bigquery.Client — verifica chunks de 256 e geração do ID",
+        "pytest tests/ -v passa"
+      ],
+      "notes": "Variáveis de ambiente usadas: GCP_PROJECT_ID, BQ_DATASET_ID, BQ_TABLE_ID (default 'processos_v2'). Para mockar SentenceTransformer: unittest.mock.patch('screping.embedder.SentenceTransformer'). Para mockar BigQuery: patch('screping.bq_writer.bigquery.Client'). Ver schema completo no CLAUDE.md."
+    },
+    {
+      "id": "US-004",
+      "title": "GitHub Actions workflow com cron noturno",
+      "description": "Criar workflow que executa o scraper todo dia às 3h BRT (6h UTC), autentica no GCP via Service Account Key e commita o checkpoint.json atualizado.",
+      "priority": 4,
+      "passes": false,
+      "acceptanceCriteria": [
+        "Criar .github/workflows/nightly-scraper.yml",
+        "Trigger: schedule cron '0 6 * * *' (3h BRT) + workflow_dispatch (trigger manual)",
+        "Usa ubuntu-latest, Python 3.12",
+        "Autentica no GCP: escreve o conteúdo do secret GCP_SA_KEY em /tmp/sa-key.json e seta GOOGLE_APPLICATION_CREDENTIALS=/tmp/sa-key.json",
+        "Instala dependências via pip install -r requirements.txt com cache de pip",
+        "Roda: python screping/main.py com variáveis de ambiente GCP_PROJECT_ID, BQ_DATASET_ID, BQ_TABLE_ID vindas de GitHub Secrets/Variables",
+        "Após execução: git config user.email/name, git add checkpoint.json, git diff --staged --quiet || git commit -m 'chore: update checkpoint [skip ci]' && git push",
+        "Se main.py falha (exit code != 0), o step de push não executa mas o job não esconde o erro (continue-on-error: false)",
+        "Adicionar seção README.md (ou criar) documentando: quais GitHub Secrets configurar (GCP_SA_KEY, GCP_PROJECT_ID, BQ_DATASET_ID, BQ_TABLE_ID) e como criar o Service Account com permissão roles/bigquery.dataEditor"
+      ],
+      "notes": "O secret GCP_SA_KEY contém o JSON completo da chave do Service Account (não o path, o conteúdo). No workflow: echo '${{ secrets.GCP_SA_KEY }}' > /tmp/sa-key.json. Usar [skip ci] na mensagem do commit para não triggerar o próprio workflow. O GCP_PROJECT_ID pode ser GitHub Variable (não secret) pois não é sensível: rag-juridico-492317."
+    }
+  ]
+}

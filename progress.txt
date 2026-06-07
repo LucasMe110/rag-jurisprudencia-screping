@@ -1,0 +1,30 @@
+# Ralph Progress Log
+Started: 2026-06-07
+---
+
+## Codebase Patterns
+- Scraper usa requests.Session com headers HEADERS definidos no topo do módulo
+- Parsing HTML usa BeautifulSoup com seletor div.resultadoItem para cada card
+- Payload do TJSC usa campos hdnTotalPaginas e hdnPaginaAtual para paginação
+- Variáveis de ambiente GCP: GCP_PROJECT_ID, BQ_DATASET_ID, BQ_TABLE_ID
+- Modelo de embedding: intfloat/multilingual-e5-base com prefixo "passage: {text}"
+- BigQuery insert: chunks de 256 com retry 3x (padrão de reindex.py no app principal)
+- ID de registro: SHA-256 de "{processo}|{data_julgamento}"
+- checkpoint.json fica na raiz do repo (não dentro de screping/)
+- HTML cards usam div.resLabel e div.resValue (não span) para campos
+- extract_processo usa a.numero-processo como prioridade, fallback para campo PROCESSO (split()[0])
+- Usar uv para criar .venv e instalar deps: `uv venv .venv && uv pip install ... --python .venv/bin/python`
+---
+
+## 2026-06-07 - US-001
+- Criado requirements.txt com: requests, beautifulsoup4, sentence-transformers, google-cloud-bigquery, torch, numpy, pytest
+- Criado screping/__init__.py (torna screping um pacote Python)
+- Criado screping/scraper.py com parse_results_page(), extract_processo(), extract_field(), fetch_page()
+- Criado tests/__init__.py e tests/test_scraper.py com 5 testes usando HTML mockado
+- Todos os testes passam: pytest tests/test_scraper.py -v (5 passed)
+- **Learnings for future iterations:**
+  - Não há pip/pip3 no sistema — usar `uv pip install` com `--python .venv/bin/python`
+  - HTML real usa div.resLabel e div.resValue (não span); seletor .resLabel/.resValue funciona para ambos
+  - O campo a.numero-processo nem sempre aparece nos cards; o fallback para PROCESSO é essencial
+  - screping/ precisa de __init__.py para ser importável como módulo nos testes
+---
