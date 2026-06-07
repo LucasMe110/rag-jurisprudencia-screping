@@ -24,7 +24,7 @@
       "title": "Scraping por faixa de data com checkpoint e retry",
       "description": "Refatorar o scraper para aceitar faixa de datas (mês/ano), adicionar retry com backoff e criar sistema de checkpoint em JSON.",
       "priority": 2,
-      "passes": false,
+      "passes": true,
       "acceptanceCriteria": [
         "Criar screping/scraper.py com função scrape_month(year: int, month: int, sleep: float = 1.0) -> list[dict] que raspa todas as páginas de um mês",
         "fetch_page() passa dtDecisaoInicio e dtDecisaoFim no payload (ex: '01/01/2018' e '31/01/2018' para janeiro 2018)",

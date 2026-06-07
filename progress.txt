@@ -14,6 +14,10 @@ Started: 2026-06-07
 - HTML cards usam div.resLabel e div.resValue (não span) para campos
 - extract_processo usa a.numero-processo como prioridade, fallback para campo PROCESSO (split()[0])
 - Usar uv para criar .venv e instalar deps: `uv venv .venv && uv pip install ... --python .venv/bin/python`
+- scrape_month aceita failed_pages: list | None = None para coletar falhas sem alterar tipo de retorno
+- Retry usa time.sleep(2**attempt) onde attempt ∈ {0,1} (apenas antes da 2ª e 3ª tentativa)
+- 3 páginas consecutivas sem resultado (ou com falha) encerram o mês — failed pages contam como consecutivas
+- patch("screping.scraper.fetch_page") + patch("time.sleep") é o padrão para testes de scrape_month
 ---
 
 ## 2026-06-07 - US-001
@@ -27,4 +31,18 @@ Started: 2026-06-07
   - HTML real usa div.resLabel e div.resValue (não span); seletor .resLabel/.resValue funciona para ambos
   - O campo a.numero-processo nem sempre aparece nos cards; o fallback para PROCESSO é essencial
   - screping/ precisa de __init__.py para ser importável como módulo nos testes
+---
+
+## 2026-06-07 - US-002
+- Criado screping/checkpoint.py com load_checkpoint() e save_checkpoint(data, path)
+- Adicionado scrape_month() em screping/scraper.py com retry 3x + backoff + failed_pages tracking
+- Adicionados imports calendar e time no topo de scraper.py
+- Criado tests/test_checkpoint.py com 4 testes usando tmp_path do pytest
+- Adicionados 7 testes de scrape_month em tests/test_scraper.py
+- 16 testes passando: pytest tests/ -v
+- **Learnings for future iterations:**
+  - scrape_month usa failed_pages: list | None = None para não alterar tipo de retorno (list[dict])
+  - Parâmetro sleep=0 nos testes evita lentidão; time.sleep é patchado para capturar calls de retry
+  - CHECKPOINT_PATH calculado via Path(__file__).parent.parent / "checkpoint.json" (raiz do repo)
+  - load_checkpoint() com arquivo inexistente retorna dict com completed_months=[] e failed_pages=[] frescos
 ---
