@@ -16,7 +16,7 @@ HEADERS = {
     "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
 }
 
-PAGE_SIZE = 10
+PAGE_SIZE = 100  # 100 registros por página reduz requests 10x (US→Brasil ~14s/req)
 
 
 def extract_field(card, label_pt: str) -> str:
