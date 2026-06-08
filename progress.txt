@@ -46,3 +46,15 @@ Started: 2026-06-07
   - CHECKPOINT_PATH calculado via Path(__file__).parent.parent / "checkpoint.json" (raiz do repo)
   - load_checkpoint() com arquivo inexistente retorna dict com completed_months=[] e failed_pages=[] frescos
 ---
+
+## 2026-06-07 - US-003
+- Criado screping/embedder.py com generate_embeddings() usando intfloat/multilingual-e5-base, prefixo "passage: ", batch_size=256, normalize_embeddings=True
+- Criado screping/bq_writer.py com insert_records() com SHA-256 de ID, chunks de 256, retry 3x com sleep(5), retorna count de erros
+- Reescrito screping/main.py como orquestrador: load_checkpoint → scrape_month → generate_embeddings → insert_records → save_checkpoint
+- main.py para com sys.exit(1) se há erros de inserção, e para com mensagem se next_month > mês atual
+- 25 testes passando: pytest tests/ -v
+- **Learnings for future iterations:**
+  - patch("screping.bq_writer.bigquery.Client") funciona com `from google.cloud import bigquery` (o mock intercepta o atributo no namespace do módulo)
+  - for/else do Python é ideal para retry: o else só roda se o loop exauriu sem break (ou seja, todos os attempts falharam)
+  - numpy e google-cloud-bigquery não estavam instalados no venv — instalar com `uv pip install numpy google-cloud-bigquery sentence-transformers --python .venv/bin/python`
+---

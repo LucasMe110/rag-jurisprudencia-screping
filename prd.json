@@ -45,7 +45,7 @@
       "title": "Embedding e inserção direta no BigQuery",
       "description": "Criar módulos para geração de embeddings com multilingual-e5-base e inserção dos registros com embeddings no BigQuery processos_v2.",
       "priority": 3,
-      "passes": false,
+      "passes": true,
       "acceptanceCriteria": [
         "Criar screping/embedder.py com função generate_embeddings(records: list[dict]) -> list[dict] que adiciona campo 'embedding' (list[float], 768 dims) em cada record",
         "Prefixo de encoding: f\"passage: {record['decisao'] or ''}\" — igual ao reindex.py do app",
