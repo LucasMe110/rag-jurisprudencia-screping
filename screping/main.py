@@ -4,7 +4,6 @@ import datetime
 
 from screping.checkpoint import load_checkpoint, save_checkpoint
 from screping.scraper import scrape_month
-from screping.embedder import generate_embeddings
 from screping.bq_writer import insert_records
 
 
@@ -24,12 +23,9 @@ def main() -> None:
     print(f"{len(records)} registros coletados.")
 
     if records:
-        print("Gerando embeddings...")
-        records = generate_embeddings(records)
-
         project_id = os.environ["GCP_PROJECT_ID"]
         dataset_id = os.environ["BQ_DATASET_ID"]
-        table_id = os.environ.get("BQ_TABLE_ID", "processos_v2")
+        table_id = os.environ.get("BQ_TABLE_ID", "processos_raw")
 
         print(f"Inserindo no BigQuery {project_id}.{dataset_id}.{table_id}...")
         errors = insert_records(records, project_id, dataset_id, table_id)
