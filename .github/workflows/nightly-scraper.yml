@@ -28,6 +28,7 @@ jobs:
 
       - name: Run scraper
         env:
+          PYTHONPATH: ${{ github.workspace }}
           GOOGLE_APPLICATION_CREDENTIALS: /tmp/sa-key.json
           GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
           BQ_DATASET_ID: ${{ secrets.BQ_DATASET_ID }}
