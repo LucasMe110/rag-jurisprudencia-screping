@@ -1,0 +1,42 @@
+name: Nightly Scraper
+
+on:
+  schedule:
+    - cron: '0 6 * * *'  # 3h BRT (UTC-3)
+  workflow_dispatch:
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Authenticate GCP
+        run: |
+          echo '${{ secrets.GCP_SA_KEY }}' > /tmp/sa-key.json
+
+      - name: Run scraper
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: /tmp/sa-key.json
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          BQ_DATASET_ID: ${{ secrets.BQ_DATASET_ID }}
+          BQ_TABLE_ID: ${{ secrets.BQ_TABLE_ID }}
+        run: python screping/main.py
+
+      - name: Commit checkpoint
+        run: |
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git add checkpoint.json
+          git diff --staged --quiet || (git commit -m "chore: update checkpoint [skip ci]" && git push)
