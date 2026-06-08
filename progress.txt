@@ -58,3 +58,18 @@ Started: 2026-06-07
   - for/else do Python é ideal para retry: o else só roda se o loop exauriu sem break (ou seja, todos os attempts falharam)
   - numpy e google-cloud-bigquery não estavam instalados no venv — instalar com `uv pip install numpy google-cloud-bigquery sentence-transformers --python .venv/bin/python`
 ---
+
+## 2026-06-07 - US-004
+- Criado .github/workflows/nightly-scraper.yml com cron '0 6 * * *' + workflow_dispatch
+- Workflow usa ubuntu-latest + Python 3.12 com cache de pip
+- Autenticação GCP: escreve GCP_SA_KEY em /tmp/sa-key.json, seta GOOGLE_APPLICATION_CREDENTIALS
+- Variáveis: GCP_PROJECT_ID como GitHub Variable (não sensível), BQ_DATASET_ID e BQ_TABLE_ID como Secrets
+- Step de commit do checkpoint: git diff --staged --quiet || (commit + push) — não falha se não há mudanças
+- Se main.py falha, step de commit não executa (sem continue-on-error) e job falha com o erro real
+- Criado README.md com tabela de Secrets/Variables e guia passo a passo para criar Service Account
+- **Learnings for future iterations:**
+  - GCP_PROJECT_ID usa `${{ vars.GCP_PROJECT_ID }}` (Variables), demais usam `${{ secrets.X }}` (Secrets)
+  - `[skip ci]` na mensagem do commit do checkpoint evita loop de trigger do workflow
+  - actions/setup-python@v5 com `cache: 'pip'` reduz tempo de instalação em execuções repetidas
+  - O passo de autenticação cria /tmp/sa-key.json com o conteúdo do JSON do SA Key (não o path)
+---
