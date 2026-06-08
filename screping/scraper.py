@@ -144,6 +144,6 @@ def fetch_page(session: requests.Session, page: int, date_start: str = "", date_
         "hdnDocsSelecionados": "",
     }
 
-    resp = session.post(PAGINAR, data=payload, headers=HEADERS, timeout=30)
+    resp = session.post(PAGINAR, data=payload, headers=HEADERS, timeout=15)
     resp.encoding = "ISO-8859-1"
     return resp.text
