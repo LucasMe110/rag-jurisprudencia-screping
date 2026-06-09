@@ -2,18 +2,35 @@
 
 ## Visão Geral
 
-Scraper de jurisprudência do TJSC para coleta histórica (2018 → presente) em lotes noturnos.
-Destino final: BigQuery `processos_v2` (mesma tabela usada pelo app JurisprudêncIA em produção).
+Scraper de jurisprudência do TJSC para coleta histórica em lotes noturnos.
+Processa do mês atual para o passado (até jan/2018), 1 mês por execução.
+
+## Pipeline — Duas Etapas
+
+```
+ETAPA 1 — GitHub Actions (automático, noturno, gratuito)
+    Scraping TJSC por faixa de data
+          ↓
+    Insere dados BRUTOS em processos_raw (sem embedding)
+          ↓
+    Commita checkpoint.json com mês anterior
+
+ETAPA 2 — Colab/máquina local (manual, quando acumular dados)
+    reindex.py --source processos_raw --dest processos_v2
+    (lê registros sem embedding → gera embedding → grava em processos_v2)
+```
+
+**Por que separar?** O modelo `multilingual-e5-base` em CPU no GitHub Actions leva horas.
+No Colab com GPU, o mesmo volume leva minutos.
 
 ## Stack
 
 | Componente | Tecnologia |
 |---|---|
 | Scraping | requests + BeautifulSoup4 |
-| Destino coleta | BigQuery — tabela `processos_raw` (dados brutos, sem embedding) |
-| Destino busca | BigQuery — tabela `processos_v2` (com embeddings, via reindex.py separado) |
-| Embedding | `intfloat/multilingual-e5-base` (768 dims) — gerado fora deste repo via reindex.py |
-| Checkpoint | `checkpoint.json` na raiz do repo |
+| Destino da coleta | BigQuery `processos_raw` — dados brutos, sem embedding |
+| Destino da busca | BigQuery `processos_v2` — com embeddings, gerado via reindex.py |
+| Checkpoint | `checkpoint.json` commitado no repo |
 | Agendamento | GitHub Actions cron `0 6 * * *` (3h BRT) — repo público = gratuito |
 | Auth GCP | Service Account Key JSON em GitHub Secret `GCP_SA_KEY` |
 
@@ -21,96 +38,75 @@ Destino final: BigQuery `processos_v2` (mesma tabela usada pelo app Jurisprudên
 
 ```
 screping/
-├── main.py           # entry point — lê checkpoint, scrapa 1 mês, embeda, insere no BQ, atualiza checkpoint
-├── scraper.py        # lógica de scraping do portal TJSC por faixa de data
-├── embedder.py       # geração de embeddings com multilingual-e5-base
-└── bq_writer.py      # inserção de registros no BigQuery processos_v2
-checkpoint.json       # estado do progresso (gerado automaticamente)
+├── main.py           # entry point — checkpoint → scrape → insert raw → update checkpoint
+├── scraper.py        # scraping TJSC por faixa de data, retry 3x, PAGE_SIZE=100
+├── checkpoint.py     # load/save checkpoint.json
+├── bq_writer.py      # streaming insert no BigQuery (sem embedding)
+└── embedder.py       # (não usado no pipeline atual — mantido para referência)
+checkpoint.json       # gerado automaticamente pelo workflow
 requirements.txt
 tests/
-├── __init__.py
 ├── test_scraper.py
-├── test_embedder.py
-└── test_bq_writer.py
+├── test_checkpoint.py
+├── test_bq_writer.py
+└── test_embedder.py
 .github/
 └── workflows/
     └── nightly-scraper.yml
 ```
 
-## Schema BigQuery — processos_v2
+## Schema BigQuery
 
+### processos_raw (destino do scraper)
 ```
-id               STRING    — SHA-256 hex de (processo + data_julgamento)
-processo         STRING    — número do processo (ex: 0001234-56.2018.8.24.0001)
+id               STRING    — SHA-256 de "{processo}|{data_julgamento}"
+processo         STRING
 orgao_julgador   STRING
 data_julgamento  STRING
 data_publicacao  STRING
 relator          STRING
 decisao          STRING    — texto completo da decisão/ementa
-embedding        FLOAT64 REPEATED — vetor 768-dim, prefixo "passage: {decisao}"
+```
+
+### processos_v2 (destino do reindex.py — gerado separadamente)
+```
+(mesmos campos acima)
+embedding        FLOAT64 REPEATED — vetor 768-dim gerado pelo reindex.py
 ```
 
 ## Formato do checkpoint.json
 
 ```json
 {
-  "next_month": "2018-01",
-  "completed_months": ["2018-01", "2018-02"],
+  "next_month": "2026-05",
+  "completed_months": ["2026-06", "2026-05"],
   "failed_pages": [
-    {"month": "2018-01", "page": 42, "error": "timeout"}
+    {"month": "2026-06", "page": 12, "error": "timeout"}
   ]
 }
 ```
 
-- `next_month`: próximo mês a processar (YYYY-MM). Quando ultrapassa o mês atual, scraping está completo.
-- `completed_months`: meses já inseridos no BQ com sucesso.
-- `failed_pages`: páginas puladas após 3 tentativas (para análise posterior).
-
-## Pipeline por Execução Noturna
-
-```
-Ler checkpoint.json
-    │
-    ▼
-scrape_month(next_month)    ← POST paginado com dtDecisaoInicio/dtDecisaoFim
-    │  retry 3x por página, skip com log se ainda falhar
-    ▼
-generate_embeddings(records) ← "passage: {decisao}" → vetor 768-dim
-    │  batch_size=256
-    ▼
-insert_to_bigquery(records)  ← streaming insert em processos_v2
-    │  chunks de 256 registros
-    ▼
-Atualizar checkpoint.json (next_month += 1 mês)
-    │
-    ▼
-git commit + push checkpoint.json
-```
-
-## Embedding
-
-Usar exatamente o mesmo modelo e prefixo que o app de produção usa em `reindex.py`:
-
-```python
-from sentence_transformers import SentenceTransformer
-model = SentenceTransformer("intfloat/multilingual-e5-base")
-texts = [f"passage: {r['decisao'] or ''}" for r in records]
-vectors = model.encode(texts, batch_size=256, normalize_embeddings=True)
-```
+- `next_month`: próximo mês a processar — começa no mês atual e vai para o passado
+- `completed_months`: meses já inseridos em `processos_raw`
+- `failed_pages`: páginas puladas após 3 tentativas (para análise posterior)
+- Para reiniciar do zero: apagar `checkpoint.json` do repo
 
 ## Padrões de Código
 
-- **TDD:** escrever testes antes do código de produção
-- **Variáveis de ambiente:** `GCP_PROJECT_ID`, `BQ_DATASET_ID`, `BQ_TABLE_ID` (valor: `processos_v2`), `GOOGLE_APPLICATION_CREDENTIALS`
-- **Geração de ID:** `hashlib.sha256(f"{processo}|{data_julgamento}".encode()).hexdigest()`
-- **Inserção BQ:** `client.insert_rows_json(table, rows)` em chunks de 256, retry 3x
-- **Sem hardcode de datas** — usar `datetime.date.today()` para saber quando parar
+- **TDD:** testes antes do código de produção
+- **Variáveis de ambiente:** `GCP_PROJECT_ID`, `BQ_DATASET_ID`, `BQ_TABLE_ID`, `GOOGLE_APPLICATION_CREDENTIALS`
+- **ID de registro:** `hashlib.sha256(f"{processo}|{data_julgamento}".encode()).hexdigest()`
+- **Inserção BQ:** `client.insert_rows_json()` em chunks de 256, retry 3x
+- **PAGE_SIZE=100** no scraper — reduz requests 10x (servidor TJSC ~29s/req do GitHub)
 
 ## Rodar Localmente
 
 ```bash
 pip install -r requirements.txt
-# Configurar .env ou variáveis de ambiente com credenciais GCP
+export GOOGLE_APPLICATION_CREDENTIALS=/caminho/para/sa-key.json
+export GCP_PROJECT_ID=seu-projeto
+export BQ_DATASET_ID=seu-dataset
+export BQ_TABLE_ID=processos_raw
 python screping/main.py
 ```
 
@@ -119,11 +115,3 @@ python screping/main.py
 ```bash
 pytest tests/ -v
 ```
-
-Todos os testes devem mockar chamadas externas (requests, BigQuery, SentenceTransformer).
-
-## GCP — Projeto e Dataset
-
-- Project: `rag-juridico-492317`
-- Dataset: variável `BQ_DATASET_ID` (tipicamente `juridico`)
-- Table: `processos_v2`
