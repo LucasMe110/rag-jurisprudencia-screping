@@ -10,10 +10,11 @@ Destino final: BigQuery `processos_v2` (mesma tabela usada pelo app Jurisprudên
 | Componente | Tecnologia |
 |---|---|
 | Scraping | requests + BeautifulSoup4 |
-| Embedding | `intfloat/multilingual-e5-base` (768 dims) via sentence-transformers |
-| Destino | BigQuery — tabela `processos_v2` no projeto `rag-juridico-492317` |
+| Destino coleta | BigQuery — tabela `processos_raw` (dados brutos, sem embedding) |
+| Destino busca | BigQuery — tabela `processos_v2` (com embeddings, via reindex.py separado) |
+| Embedding | `intfloat/multilingual-e5-base` (768 dims) — gerado fora deste repo via reindex.py |
 | Checkpoint | `checkpoint.json` na raiz do repo |
-| Agendamento | GitHub Actions cron `0 6 * * *` (3h BRT) |
+| Agendamento | GitHub Actions cron `0 6 * * *` (3h BRT) — repo público = gratuito |
 | Auth GCP | Service Account Key JSON em GitHub Secret `GCP_SA_KEY` |
 
 ## Estrutura de Arquivos
