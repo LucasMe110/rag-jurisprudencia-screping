@@ -1,18 +1,26 @@
+import datetime
 import json
 from pathlib import Path
 
 CHECKPOINT_PATH = Path(__file__).parent.parent / "checkpoint.json"
 
-_DEFAULT: dict = {
-    "next_month": "2018-01",
-    "completed_months": [],
-    "failed_pages": [],
-}
+
+def _current_month_str() -> str:
+    today = datetime.date.today()
+    return f"{today.year}-{today.month:02d}"
+
+
+def _default() -> dict:
+    return {
+        "next_month": _current_month_str(),
+        "completed_months": [],
+        "failed_pages": [],
+    }
 
 
 def load_checkpoint(path: Path = CHECKPOINT_PATH) -> dict:
     if not Path(path).exists():
-        return dict(_DEFAULT) | {"completed_months": [], "failed_pages": []}
+        return _default()
     with open(path, encoding="utf-8") as f:
         return json.load(f)
 

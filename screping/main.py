@@ -12,9 +12,8 @@ def main() -> None:
     next_month_str = checkpoint["next_month"]
     year, month = map(int, next_month_str.split("-"))
 
-    today = datetime.date.today()
-    if datetime.date(year, month, 1) > today.replace(day=1):
-        print("Coleta completa — next_month já ultrapassa o mês atual.")
+    if datetime.date(year, month, 1) < datetime.date(2018, 1, 1):
+        print("Coleta completa — chegamos em janeiro/2018.")
         return
 
     failed_pages: list = checkpoint.get("failed_pages", [])
@@ -33,8 +32,8 @@ def main() -> None:
             print(f"ERRO: {errors} registros não foram inseridos.", file=sys.stderr)
             sys.exit(1)
 
-    next_month = month + 1 if month < 12 else 1
-    next_year = year if month < 12 else year + 1
+    next_month = month - 1 if month > 1 else 12
+    next_year = year if month > 1 else year - 1
 
     completed_months = checkpoint.get("completed_months", [])
     completed_months.append(next_month_str)
