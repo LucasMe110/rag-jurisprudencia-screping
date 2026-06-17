@@ -1,6 +1,6 @@
 import requests
 from unittest.mock import patch, call
-from screping.scraper import parse_results_page, extract_processo, scrape_month
+from screping.scraper import parse_results_page, extract_processo, scrape_month, extract_field
 from bs4 import BeautifulSoup
 
 TWO_CARDS_HTML = """
@@ -243,6 +243,131 @@ def test_scrape_month_records_failed_pages():
     assert failed[0]["month"] == "2018-01"
     assert failed[0]["page"] == 1
     assert "connection refused" in failed[0]["error"]
+
+
+# --- US-101: parser robusto (campos por .resLabel, aliases de relator) ---
+
+# Estilo TJSC: campos em div.row, label RELATOR, campo EMENTA no segundo card.
+# (já coberto por TWO_CARDS_HTML acima)
+
+# Estilo TJSP: vários campos embrulhados em <div class="col-12 col-md-4">,
+# label MAGISTRADA (alias de relator), DATA DO JULGAMENTO / DATA DA PUBLICAÇÃO.
+TJSP_CARD_HTML = """
+<html><body>
+<div class="resultadoItem">
+    <a class="numero-processo">1001234-56.2026.8.26.0100</a>
+    <div class="row">
+        <div class="col-12 col-md-4">
+            <div class="resLabel">ÓRGÃO JULGADOR</div>
+            <div class="resValue">4ª Câmara de Direito Privado</div>
+        </div>
+        <div class="col-12 col-md-4">
+            <div class="resLabel">DATA DO JULGAMENTO</div>
+            <div class="resValue">31/05/2026</div>
+        </div>
+        <div class="col-12 col-md-4">
+            <div class="resLabel">DATA DA PUBLICAÇÃO</div>
+            <div class="resValue">02/06/2026</div>
+        </div>
+    </div>
+    <div class="row">
+        <div class="col-12 col-md-4">
+            <div class="resLabel">MAGISTRADA</div>
+            <div class="resValue">Maria Aparecida</div>
+        </div>
+    </div>
+    <div class="row">
+        <div class="col-12">
+            <div class="resLabel">EMENTA</div>
+            <div class="resValue">Apelação. Recurso provido.</div>
+        </div>
+    </div>
+</div>
+</body></html>
+"""
+
+# Estilo TJRJ: campos em div.col, label RELATOR, EMENTA presente.
+TJRJ_CARD_HTML = """
+<html><body>
+<div class="resultadoItem">
+    <a class="numero-processo">0012345-67.2025.8.19.0001</a>
+    <div class="row">
+        <div class="col">
+            <div class="resLabel">ÓRGÃO JULGADOR</div>
+            <div class="resValue">Quinta Câmara Cível</div>
+        </div>
+        <div class="col">
+            <div class="resLabel">DATA DO JULGAMENTO</div>
+            <div class="resValue">10/04/2025</div>
+        </div>
+        <div class="col">
+            <div class="resLabel">DATA DA PUBLICAÇÃO</div>
+            <div class="resValue">14/04/2025</div>
+        </div>
+    </div>
+    <div class="row">
+        <div class="col">
+            <div class="resLabel">RELATOR</div>
+            <div class="resValue">Des. Carlos Pereira</div>
+        </div>
+        <div class="col">
+            <div class="resLabel">EMENTA</div>
+            <div class="resValue">Negado provimento ao recurso.</div>
+        </div>
+    </div>
+</div>
+</body></html>
+"""
+
+
+def test_extract_field_accepts_aliases():
+    soup = BeautifulSoup(TJSP_CARD_HTML, "html.parser")
+    card = soup.select_one("div.resultadoItem")
+    # MAGISTRADA é alias de relator; o primeiro label que casar vence
+    assert extract_field(card, "RELATOR", "RELATORA", "MAGISTRADA", "MAGISTRADO") == "Maria Aparecida"
+
+
+def test_extract_field_returns_empty_when_no_label_matches():
+    soup = BeautifulSoup(TJRJ_CARD_HTML, "html.parser")
+    card = soup.select_one("div.resultadoItem")
+    assert extract_field(card, "INEXISTENTE") == ""
+
+
+def test_parse_tjsc_style_all_fields():
+    """Estilo TJSC (div.row, RELATOR, EMENTA) — todos os 6 campos preenchidos."""
+    items = parse_results_page(TWO_CARDS_HTML)
+    second = items[1]
+    assert second["processo"] == "0009876-54.2018.8.24.0002"
+    assert second["orgao_julgador"] == "Segunda Câmara de Direito Civil"
+    assert second["data_julgamento"] == "05/03/2018"
+    assert second["data_publicacao"] == "20/03/2018"
+    assert second["relator"] == "Dra. Maria Santos"
+    assert second["decisao"] == "Apelação desprovida."
+
+
+def test_parse_tjsp_style_col_wrappers_and_magistrada():
+    """Estilo TJSP: campos em col-12 col-md-4, relator via MAGISTRADA."""
+    items = parse_results_page(TJSP_CARD_HTML)
+    assert len(items) == 1
+    item = items[0]
+    assert item["processo"] == "1001234-56.2026.8.26.0100"
+    assert item["data_julgamento"] == "31/05/2026"
+    assert item["data_publicacao"] == "02/06/2026"
+    assert item["relator"] == "Maria Aparecida"
+    assert item["decisao"] == "Apelação. Recurso provido."
+
+
+def test_parse_tjrj_style_all_fields():
+    """Estilo TJRJ: campos em div.col, RELATOR, EMENTA — todos os 6 campos."""
+    items = parse_results_page(TJRJ_CARD_HTML)
+    assert len(items) == 1
+    item = items[0]
+    assert item["processo"] == "0012345-67.2025.8.19.0001"
+    assert item["orgao_julgador"] == "Quinta Câmara Cível"
+    assert item["data_julgamento"] == "10/04/2025"
+    assert item["data_publicacao"] == "14/04/2025"
+    assert item["relator"] == "Des. Carlos Pereira"
+    assert item["decisao"] == "Negado provimento ao recurso."
 
 
 def test_scrape_month_retry_sleep_called():

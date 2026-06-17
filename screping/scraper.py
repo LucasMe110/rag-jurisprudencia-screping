@@ -19,13 +19,22 @@ HEADERS = {
 PAGE_SIZE = 100  # 100 registros por página reduz requests 10x (US→Brasil ~14s/req)
 
 
-def extract_field(card, label_pt: str) -> str:
-    for row in card.select("div.row"):
-        lab = row.select_one(".resLabel")
-        val = row.select_one(".resValue")
-        if not lab or not val:
+def extract_field(card, *labels: str) -> str:
+    """Retorna o valor do primeiro .resLabel cujo texto casa com algum dos labels.
+
+    Itera .resLabel direto (não div.row): no TJSC os campos ficam em div.row,
+    mas no TJSP/TJRJ vários ficam em <div class="col-12 col-md-4">. Para cada
+    label encontrado, o .resValue par é o irmão seguinte; se não houver, busca
+    dentro do parent.
+    """
+    wanted = {lab.upper() for lab in labels}
+    for lab in card.select(".resLabel"):
+        if lab.get_text(" ", strip=True).upper() not in wanted:
             continue
-        if lab.get_text(" ", strip=True).upper() == label_pt.upper():
+        val = lab.find_next_sibling(class_="resValue")
+        if val is None and lab.parent is not None:
+            val = lab.parent.select_one(".resValue")
+        if val is not None:
             return val.get_text(" ", strip=True)
     return ""
 
@@ -49,10 +58,8 @@ def parse_results_page(html: str) -> list[dict]:
         orgao = extract_field(card, "ÓRGÃO JULGADOR")
         data_julg = extract_field(card, "DATA DO JULGAMENTO")
         data_pub = extract_field(card, "DATA DA PUBLICAÇÃO")
-        relator = extract_field(card, "RELATOR")
-        decisao = extract_field(card, "DECISÃO")
-        if not decisao:
-            decisao = extract_field(card, "EMENTA")
+        relator = extract_field(card, "RELATOR", "RELATORA", "MAGISTRADA", "MAGISTRADO")
+        decisao = extract_field(card, "DECISÃO") or extract_field(card, "EMENTA")
 
         items.append({
             "processo": processo,

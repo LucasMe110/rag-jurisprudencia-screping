@@ -1,75 +1,34 @@
 # Ralph Progress Log
-Started: 2026-06-07
+Started: 2026-06-16 (Fase 1 — Multi-Tribunal / TJSP)
+Histórico da run anterior (scraper TJSC, US-001..US-004): archive/2026-06-16-scraper-batch-nightly/progress.txt
 ---
 
 ## Codebase Patterns
 - Scraper usa requests.Session com headers HEADERS definidos no topo do módulo
 - Parsing HTML usa BeautifulSoup com seletor div.resultadoItem para cada card
-- Payload do TJSC usa campos hdnTotalPaginas e hdnPaginaAtual para paginação
-- Variáveis de ambiente GCP: GCP_PROJECT_ID, BQ_DATASET_ID, BQ_TABLE_ID
-- Modelo de embedding: intfloat/multilingual-e5-base com prefixo "passage: {text}"
-- BigQuery insert: chunks de 256 com retry 3x (padrão de reindex.py no app principal)
-- ID de registro: SHA-256 de "{processo}|{data_julgamento}"
+- Payload do POST (fetch_page) é idêntico entre tribunais — só mudam a URL (base eproc) e os headers Origin/Referer
+- Campos vêm em pares .resLabel / .resValue; no TJSC ficam em div.row, no TJSP/TJRJ vários ficam em <div class="col-12 col-md-4"> — por isso o parser deve iterar .resLabel direto (não só div.row)
+- extract_processo usa a.numero-processo como prioridade, fallback para campo PROCESSO (split()[0]) — já limpa lixo tipo "ProCom - Procedimento" do TJSP
+- Relator: label varia — RELATOR/RELATORA (TJSC, TJRJ) e MAGISTRADA/MAGISTRADO (TJSP)
+- Variáveis de ambiente GCP: GCP_PROJECT_ID, BQ_DATASET_ID, BQ_TABLE_ID (=processos_raw nesta fase, dados BRUTOS sem embedding)
+- ID de registro: SHA-256 de "{processo}|{data_julgamento}" — número CNJ já discrimina o tribunal (.8.26.=SP, .8.24.=SC, .8.19.=RJ)
+- BigQuery insert: chunks de 256 com retry 3x; mock em teste: patch("screping.bq_writer.bigquery.Client")
 - checkpoint.json fica na raiz do repo (não dentro de screping/)
-- HTML cards usam div.resLabel e div.resValue (não span) para campos
-- extract_processo usa a.numero-processo como prioridade, fallback para campo PROCESSO (split()[0])
-- Usar uv para criar .venv e instalar deps: `uv venv .venv && uv pip install ... --python .venv/bin/python`
+- Usar uv para venv/deps: `uv venv .venv && uv pip install -r requirements.txt --python .venv/bin/python` (não há pip/pip3 no sistema)
 - scrape_month aceita failed_pages: list | None = None para coletar falhas sem alterar tipo de retorno
-- Retry usa time.sleep(2**attempt) onde attempt ∈ {0,1} (apenas antes da 2ª e 3ª tentativa)
-- 3 páginas consecutivas sem resultado (ou com falha) encerram o mês — failed pages contam como consecutivas
-- patch("screping.scraper.fetch_page") + patch("time.sleep") é o padrão para testes de scrape_month
+- Padrão de teste de scrape_month: patch("screping.scraper.fetch_page") + patch("time.sleep"); sleep=0 evita lentidão
+- 3 páginas consecutivas sem resultado (ou com falha) encerram o mês
+- Tribunais drop-in confirmados na Fase 0: TJSC, TJSP (eproc1g.tjsp.jus.br), TJRJ (eproc1g.tjrj.jus.br). TJRS/TJMG/etc usam outra implementação eproc (lançam exceção)
+- Embedding de produção (fora desta fase): intfloat/multilingual-e5-base, prefixo "passage: {text}"
 ---
 
-## 2026-06-07 - US-001
-- Criado requirements.txt com: requests, beautifulsoup4, sentence-transformers, google-cloud-bigquery, torch, numpy, pytest
-- Criado screping/__init__.py (torna screping um pacote Python)
-- Criado screping/scraper.py com parse_results_page(), extract_processo(), extract_field(), fetch_page()
-- Criado tests/__init__.py e tests/test_scraper.py com 5 testes usando HTML mockado
-- Todos os testes passam: pytest tests/test_scraper.py -v (5 passed)
-- **Learnings for future iterations:**
-  - Não há pip/pip3 no sistema — usar `uv pip install` com `--python .venv/bin/python`
-  - HTML real usa div.resLabel e div.resValue (não span); seletor .resLabel/.resValue funciona para ambos
-  - O campo a.numero-processo nem sempre aparece nos cards; o fallback para PROCESSO é essencial
-  - screping/ precisa de __init__.py para ser importável como módulo nos testes
----
-
-## 2026-06-07 - US-002
-- Criado screping/checkpoint.py com load_checkpoint() e save_checkpoint(data, path)
-- Adicionado scrape_month() em screping/scraper.py com retry 3x + backoff + failed_pages tracking
-- Adicionados imports calendar e time no topo de scraper.py
-- Criado tests/test_checkpoint.py com 4 testes usando tmp_path do pytest
-- Adicionados 7 testes de scrape_month em tests/test_scraper.py
-- 16 testes passando: pytest tests/ -v
-- **Learnings for future iterations:**
-  - scrape_month usa failed_pages: list | None = None para não alterar tipo de retorno (list[dict])
-  - Parâmetro sleep=0 nos testes evita lentidão; time.sleep é patchado para capturar calls de retry
-  - CHECKPOINT_PATH calculado via Path(__file__).parent.parent / "checkpoint.json" (raiz do repo)
-  - load_checkpoint() com arquivo inexistente retorna dict com completed_months=[] e failed_pages=[] frescos
----
-
-## 2026-06-07 - US-003
-- Criado screping/embedder.py com generate_embeddings() usando intfloat/multilingual-e5-base, prefixo "passage: ", batch_size=256, normalize_embeddings=True
-- Criado screping/bq_writer.py com insert_records() com SHA-256 de ID, chunks de 256, retry 3x com sleep(5), retorna count de erros
-- Reescrito screping/main.py como orquestrador: load_checkpoint → scrape_month → generate_embeddings → insert_records → save_checkpoint
-- main.py para com sys.exit(1) se há erros de inserção, e para com mensagem se next_month > mês atual
-- 25 testes passando: pytest tests/ -v
-- **Learnings for future iterations:**
-  - patch("screping.bq_writer.bigquery.Client") funciona com `from google.cloud import bigquery` (o mock intercepta o atributo no namespace do módulo)
-  - for/else do Python é ideal para retry: o else só roda se o loop exauriu sem break (ou seja, todos os attempts falharam)
-  - numpy e google-cloud-bigquery não estavam instalados no venv — instalar com `uv pip install numpy google-cloud-bigquery sentence-transformers --python .venv/bin/python`
----
-
-## 2026-06-07 - US-004
-- Criado .github/workflows/nightly-scraper.yml com cron '0 6 * * *' + workflow_dispatch
-- Workflow usa ubuntu-latest + Python 3.12 com cache de pip
-- Autenticação GCP: escreve GCP_SA_KEY em /tmp/sa-key.json, seta GOOGLE_APPLICATION_CREDENTIALS
-- Variáveis: GCP_PROJECT_ID como GitHub Variable (não sensível), BQ_DATASET_ID e BQ_TABLE_ID como Secrets
-- Step de commit do checkpoint: git diff --staged --quiet || (commit + push) — não falha se não há mudanças
-- Se main.py falha, step de commit não executa (sem continue-on-error) e job falha com o erro real
-- Criado README.md com tabela de Secrets/Variables e guia passo a passo para criar Service Account
-- **Learnings for future iterations:**
-  - GCP_PROJECT_ID usa `${{ vars.GCP_PROJECT_ID }}` (Variables), demais usam `${{ secrets.X }}` (Secrets)
-  - `[skip ci]` na mensagem do commit do checkpoint evita loop de trigger do workflow
-  - actions/setup-python@v5 com `cache: 'pip'` reduz tempo de instalação em execuções repetidas
-  - O passo de autenticação cria /tmp/sa-key.json com o conteúdo do JSON do SA Key (não o path)
+## 2026-06-16 - US-101
+- Refatorado extract_field(card, *labels): itera card.select(".resLabel") direto (não mais div.row); aceita N labels; .resValue par via find_next_sibling, fallback lab.parent.select_one(".resValue")
+- parse_results_page: relator com aliases (RELATOR/RELATORA/MAGISTRADA/MAGISTRADO); decisao = DECISÃO or EMENTA
+- Arquivos: screping/scraper.py, tests/test_scraper.py (fixtures TJSC/TJSP/TJRJ + testes de alias)
+- **Aprendizados:**
+  - extract_field agora é variádico (*labels) — assinatura antiga de 1 label continua funcionando posicionalmente
+  - find_next_sibling(class_="resValue") cobre TJSC (div.row) e TJSP/TJRJ (col-12 col-md-4) pois label/value são irmãos no mesmo wrapper
+  - Pré-existentes FALHANDO antes desta story (fora do escopo US-101): tests/test_checkpoint.py::test_load_checkpoint_missing_file (será resolvido na US-103) e tests/test_embedder.py::test_generate_embeddings_uses_correct_encode_params (embedder fora desta fase). Verificado com git stash que falham sem minhas mudanças.
+  - Suite scraper: 17 passed; full: 28 passed / 2 pré-existentes failed
 ---
