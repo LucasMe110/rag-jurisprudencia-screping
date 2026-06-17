@@ -69,3 +69,16 @@ Histórico da run anterior (scraper TJSC, US-001..US-004): archive/2026-06-16-sc
   - Streaming insert exige coluna preexistente → migração de schema é pré-requisito manual, não automatizável no Ralph
   - Suite bq_writer: 7 passed; full: 44 passed / 1 pré-existente failed (test_embedder, fora desta fase)
 ---
+
+## 2026-06-16 - US-105
+- nightly-scraper.yml: strategy.matrix.tribunal [tjsc, tjsp] + max-parallel: 1; step do scraper recebe env TRIBUNAL: ${{ matrix.tribunal }}
+- Commit step: git pull --rebase origin ${{ github.ref_name }} antes do push; mensagem "chore: update checkpoint <tribunal> [skip ci]"; early `exit 0` quando não há diff
+- README.md: título multi-tribunal, tabela de tribunais (base eproc + STOP_MONTH), checkpoint indexado por tribunal, env TRIBUNAL/STOP_MONTH na execução local, nota de pré-requisito de schema linkando docs/migracao-tribunal.md (US-104)
+- Arquivos: .github/workflows/nightly-scraper.yml, README.md, prd.json, progress.txt
+- **Aprendizados:**
+  - max-parallel:1 + git pull --rebase é o que torna seguro dois jobs da matriz commitarem o MESMO checkpoint.json sequencialmente (evita non-fast-forward)
+  - `git diff --staged --quiet && exit 0` separa o caminho "sem mudança" do commit/rebase/push — mais legível que o `|| (... && ...)` anterior
+  - github.ref_name dá o nome da branch atual para o rebase (funciona em cron, dispatch e push)
+  - US-105 não tem teste pytest (critério = YAML válido + docs); validado com `yaml.safe_load`. Suite full inalterada: 44 passed / 1 pré-existente failed (test_embedder, fora desta fase)
+  - TODAS as histórias do PRD (US-101..US-105) agora com passes: true
+---

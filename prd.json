@@ -85,7 +85,7 @@
       "title": "GitHub Actions: coletar TJSP em paralelo ao TJSC (matriz)",
       "description": "Atualizar o workflow noturno para rodar o scraper por tribunal via matriz, passando TRIBUNAL, e commitando o checkpoint compartilhado com segurança.",
       "priority": 5,
-      "passes": false,
+      "passes": true,
       "acceptanceCriteria": [
         ".github/workflows/nightly-scraper.yml usa strategy.matrix.tribunal: [tjsc, tjsp]",
         "max-parallel: 1 (evita commits concorrentes no mesmo checkpoint.json)",
