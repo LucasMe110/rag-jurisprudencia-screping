@@ -16,6 +16,7 @@ def insert_records(records: list[dict], project_id: str, dataset_id: str, table_
             row["id"] = hashlib.sha256(
                 f"{r['processo']}|{r['data_julgamento']}".encode()
             ).hexdigest()
+            row["tribunal"] = r.get("tribunal", "tjsc")
             rows.append(row)
 
         for attempt in range(3):

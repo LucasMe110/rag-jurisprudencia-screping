@@ -68,7 +68,7 @@
       "title": "Inserir coluna 'tribunal' no BigQuery processos_raw",
       "description": "bq_writer passa a gravar o campo 'tribunal' em cada linha; documentar a migração de schema da tabela processos_raw (ADD COLUMN + backfill dos registros TJSC existentes).",
       "priority": 4,
-      "passes": false,
+      "passes": true,
       "acceptanceCriteria": [
         "insert_records inclui row['tribunal'] = record['tribunal'] (mantém os demais campos)",
         "ID continua hashlib.sha256(f\"{processo}|{data_julgamento}\".encode()).hexdigest() — o número CNJ já discrimina o tribunal (ex.: .8.26. = SP, .8.24. = SC, .8.19. = RJ), sem risco de colisão entre tribunais",

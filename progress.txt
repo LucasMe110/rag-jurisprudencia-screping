@@ -59,3 +59,13 @@ Histórico da run anterior (scraper TJSC, US-001..US-004): archive/2026-06-16-sc
   - Reescrevi test_checkpoint.py inteiro para a nova assinatura (tribunal como 1º arg em load/save)
   - Restante falho agora: só test_embedder (fora desta fase). Suite checkpoint: 7 passed; full: 42 passed / 1 pré-existente failed (embedder)
 ---
+
+## 2026-06-16 - US-104
+- bq_writer.insert_records grava row["tribunal"] = r.get("tribunal", "tjsc") (default tjsc p/ compatibilidade); ID SHA-256 inalterado
+- docs/migracao-tribunal.md: ALTER TABLE ADD COLUMN tribunal STRING + UPDATE SET tribunal='tjsc' WHERE NULL — explicitamente MANUAL (Ralph não executa)
+- Arquivos: screping/bq_writer.py, tests/test_bq_writer.py, docs/migracao-tribunal.md
+- **Aprendizados:**
+  - r.get("tribunal", "tjsc") cobre tanto registros do scraper novo (que já injeta tribunal via US-102) quanto chamadas antigas/legadas sem o campo
+  - Streaming insert exige coluna preexistente → migração de schema é pré-requisito manual, não automatizável no Ralph
+  - Suite bq_writer: 7 passed; full: 44 passed / 1 pré-existente failed (test_embedder, fora desta fase)
+---

@@ -73,6 +73,37 @@ def test_insert_records_retries_on_error():
         assert mock_sleep.call_count == 2
 
 
+def test_insert_records_includes_tribunal_field():
+    records = [_record(processo="001", data_julgamento="01/01/2018")]
+    records[0]["tribunal"] = "tjsp"
+
+    with patch("screping.bq_writer.bigquery.Client") as MockClient:
+        mock_client = MagicMock()
+        MockClient.return_value = mock_client
+        mock_client.insert_rows_json.return_value = []
+
+        insert_records(records, "project", "dataset", "table")
+
+        inserted = mock_client.insert_rows_json.call_args[0][1]
+        assert inserted[0]["tribunal"] == "tjsp"
+
+
+def test_insert_records_defaults_tribunal_to_tjsc():
+    records = [_record(processo="001", data_julgamento="01/01/2018")]
+    expected_id = hashlib.sha256("001|01/01/2018".encode()).hexdigest()
+
+    with patch("screping.bq_writer.bigquery.Client") as MockClient:
+        mock_client = MagicMock()
+        MockClient.return_value = mock_client
+        mock_client.insert_rows_json.return_value = []
+
+        insert_records(records, "project", "dataset", "table")
+
+        inserted = mock_client.insert_rows_json.call_args[0][1]
+        assert inserted[0]["tribunal"] == "tjsc"
+        assert inserted[0]["id"] == expected_id
+
+
 def test_insert_records_counts_errors_after_3_failed_attempts():
     records = [_record()]
     error_response = [{"index": 0, "errors": [{"reason": "notFound"}]}]
