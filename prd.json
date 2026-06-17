@@ -28,7 +28,7 @@
       "title": "Registro de tribunais e scraping parametrizado por tribunal",
       "description": "Introduzir um registro TRIBUNAIS com a base eproc de cada tribunal e parametrizar fetch_page/scrape_month pelo tribunal. Cada registro coletado passa a carregar o campo 'tribunal'.",
       "priority": 2,
-      "passes": false,
+      "passes": true,
       "acceptanceCriteria": [
         "screping/scraper.py define TRIBUNAIS = {'tjsc': {'base': 'https://eproc1g.tjsc.jus.br'}, 'tjsp': {'base': 'https://eproc1g.tjsp.jus.br'}, 'tjrj': {'base': 'https://eproc1g.tjrj.jus.br'}}",
         "Função auxiliar (ex: _urls(tribunal)) deriva LISTAR_RESULTADOS e PAGINAR a partir do base do tribunal, mantendo o sufixo de rota acao=jurisprudencia@jurisprudencia/...",

@@ -32,3 +32,17 @@ Histórico da run anterior (scraper TJSC, US-001..US-004): archive/2026-06-16-sc
   - Pré-existentes FALHANDO antes desta story (fora do escopo US-101): tests/test_checkpoint.py::test_load_checkpoint_missing_file (será resolvido na US-103) e tests/test_embedder.py::test_generate_embeddings_uses_correct_encode_params (embedder fora desta fase). Verificado com git stash que falham sem minhas mudanças.
   - Suite scraper: 17 passed; full: 28 passed / 2 pré-existentes failed
 ---
+
+## 2026-06-16 - US-102
+- Adicionado registro TRIBUNAIS = {tjsc, tjsp, tjrj} com base eproc de cada um
+- _urls(tribunal) deriva (LISTAR_RESULTADOS, PAGINAR) do base; levanta ValueError se tribunal inválido
+- _headers(tribunal) deriva Origin/Referer do base (removidas as constantes globais BASE/LISTAR_RESULTADOS/PAGINAR/HEADERS fixas no TJSC)
+- fetch_page(..., tribunal="tjsc") e scrape_month(..., tribunal="tjsc"); scrape_month injeta record["tribunal"]=tribunal e valida o tribunal cedo via _urls()
+- Arquivos: screping/scraper.py, tests/test_scraper.py
+- **Aprendizados:**
+  - scrape_month chama fetch_page com tribunal como KWARG → os side_effects dos testes existentes precisaram ganhar param tribunal="tjsc" (atualizados 4 side_effects, sem mudar asserts)
+  - Default tribunal="tjsc" em todas as assinaturas preserva 100% da compatibilidade (testes antigos de datas/retry/failed_pages passam sem mudança de chamada)
+  - Validação de tribunal centralizada em _urls() — fetch_page e scrape_month reaproveitam, evitando duplicar a checagem
+  - main.py NÃO referenciava as constantes removidas (confirmado por grep) — sem regressão fora do scraper
+  - Suite scraper: 27 passed; full: 38 passed / 2 pré-existentes failed (checkpoint US-103, embedder fora de fase)
+---

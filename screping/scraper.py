@@ -3,20 +3,44 @@ import time
 import requests
 from bs4 import BeautifulSoup
 
-BASE = "https://eproc1g.tjsc.jus.br"
-LISTAR_RESULTADOS = f"{BASE}/eproc/externo_controlador.php?acao=jurisprudencia@jurisprudencia/listar_resultados"
-PAGINAR = f"{BASE}/eproc/externo_controlador.php?acao=jurisprudencia@jurisprudencia/ajax_paginar_resultado"
-
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
-    "X-Requested-With": "XMLHttpRequest",
-    "Origin": BASE,
-    "Referer": LISTAR_RESULTADOS,
-    "Accept": "*/*",
-    "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+# Registro de tribunais — todos rodam a MESMA implementação eproc
+# (rota acao=jurisprudencia@jurisprudencia). Só muda o host base.
+TRIBUNAIS = {
+    "tjsc": {"base": "https://eproc1g.tjsc.jus.br"},
+    "tjsp": {"base": "https://eproc1g.tjsp.jus.br"},
+    "tjrj": {"base": "https://eproc1g.tjrj.jus.br"},
 }
 
 PAGE_SIZE = 100  # 100 registros por página reduz requests 10x (US→Brasil ~14s/req)
+
+
+def _urls(tribunal: str) -> tuple[str, str]:
+    """Deriva (LISTAR_RESULTADOS, PAGINAR) a partir do base do tribunal.
+
+    Levanta ValueError se o tribunal não estiver registrado em TRIBUNAIS.
+    """
+    if tribunal not in TRIBUNAIS:
+        raise ValueError(
+            f"Tribunal inválido: {tribunal!r}. Disponíveis: {sorted(TRIBUNAIS)}"
+        )
+    base = TRIBUNAIS[tribunal]["base"]
+    listar = f"{base}/eproc/externo_controlador.php?acao=jurisprudencia@jurisprudencia/listar_resultados"
+    paginar = f"{base}/eproc/externo_controlador.php?acao=jurisprudencia@jurisprudencia/ajax_paginar_resultado"
+    return listar, paginar
+
+
+def _headers(tribunal: str) -> dict:
+    """Headers da requisição com Origin/Referer derivados do base do tribunal."""
+    listar, _ = _urls(tribunal)
+    base = TRIBUNAIS[tribunal]["base"]
+    return {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
+        "X-Requested-With": "XMLHttpRequest",
+        "Origin": base,
+        "Referer": listar,
+        "Accept": "*/*",
+        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+    }
 
 
 def extract_field(card, *labels: str) -> str:
@@ -78,7 +102,9 @@ def scrape_month(
     month: int,
     sleep: float = 1.0,
     failed_pages: list | None = None,
+    tribunal: str = "tjsc",
 ) -> list[dict]:
+    _urls(tribunal)  # valida o tribunal cedo (levanta ValueError se inválido)
     _, last_day = calendar.monthrange(year, month)
     date_start = f"01/{month:02d}/{year}"
     date_end = f"{last_day:02d}/{month:02d}/{year}"
@@ -95,7 +121,7 @@ def scrape_month(
 
         for attempt in range(3):
             try:
-                html = fetch_page(session, page, date_start, date_end)
+                html = fetch_page(session, page, date_start, date_end, tribunal=tribunal)
                 last_error = None
                 break
             except Exception as exc:
@@ -115,6 +141,8 @@ def scrape_month(
         items = parse_results_page(html)
         if items:
             consecutive_no_results = 0
+            for item in items:
+                item["tribunal"] = tribunal
             records.extend(items)
         else:
             consecutive_no_results += 1
@@ -126,7 +154,14 @@ def scrape_month(
     return records
 
 
-def fetch_page(session: requests.Session, page: int, date_start: str = "", date_end: str = "") -> str:
+def fetch_page(
+    session: requests.Session,
+    page: int,
+    date_start: str = "",
+    date_end: str = "",
+    tribunal: str = "tjsc",
+) -> str:
+    _, paginar = _urls(tribunal)
     payload = {
         "acao": "jurisprudencia@jurisprudencia/ajax_paginar_resultado",
         "txtPesquisa": "",
@@ -151,6 +186,6 @@ def fetch_page(session: requests.Session, page: int, date_start: str = "", date_
         "hdnDocsSelecionados": "",
     }
 
-    resp = session.post(PAGINAR, data=payload, headers=HEADERS, timeout=45)
+    resp = session.post(paginar, data=payload, headers=_headers(tribunal), timeout=45)
     resp.encoding = "ISO-8859-1"
     return resp.text
