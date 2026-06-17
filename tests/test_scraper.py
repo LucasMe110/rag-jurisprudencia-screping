@@ -1,6 +1,15 @@
+import pytest
 import requests
 from unittest.mock import patch, call
-from screping.scraper import parse_results_page, extract_processo, scrape_month
+from screping.scraper import (
+    parse_results_page,
+    extract_processo,
+    scrape_month,
+    extract_field,
+    fetch_page,
+    _urls,
+    TRIBUNAIS,
+)
 from bs4 import BeautifulSoup
 
 TWO_CARDS_HTML = """
@@ -198,7 +207,7 @@ def test_scrape_month_stops_after_3_consecutive_empty():
 def test_scrape_month_resets_consecutive_count_on_results():
     responses = {2: SINGLE_CARD_HTML}
 
-    def side_effect(session, page, date_start, date_end):
+    def side_effect(session, page, date_start, date_end, tribunal="tjsc"):
         return responses.get(page, EMPTY)
 
     with patch("screping.scraper.fetch_page", side_effect=side_effect), \
@@ -213,7 +222,7 @@ def test_scrape_month_resets_consecutive_count_on_results():
 def test_scrape_month_retries_on_exception():
     call_counter = [0]
 
-    def side_effect(session, page, date_start, date_end):
+    def side_effect(session, page, date_start, date_end, tribunal="tjsc"):
         call_counter[0] += 1
         if call_counter[0] <= 2:
             raise requests.exceptions.Timeout("timeout")
@@ -231,7 +240,7 @@ def test_scrape_month_retries_on_exception():
 def test_scrape_month_records_failed_pages():
     failed = []
 
-    def always_fail(session, page, date_start, date_end):
+    def always_fail(session, page, date_start, date_end, tribunal="tjsc"):
         raise requests.exceptions.ConnectionError("connection refused")
 
     with patch("screping.scraper.fetch_page", side_effect=always_fail), \
@@ -245,10 +254,135 @@ def test_scrape_month_records_failed_pages():
     assert "connection refused" in failed[0]["error"]
 
 
+# --- US-101: parser robusto (campos por .resLabel, aliases de relator) ---
+
+# Estilo TJSC: campos em div.row, label RELATOR, campo EMENTA no segundo card.
+# (já coberto por TWO_CARDS_HTML acima)
+
+# Estilo TJSP: vários campos embrulhados em <div class="col-12 col-md-4">,
+# label MAGISTRADA (alias de relator), DATA DO JULGAMENTO / DATA DA PUBLICAÇÃO.
+TJSP_CARD_HTML = """
+<html><body>
+<div class="resultadoItem">
+    <a class="numero-processo">1001234-56.2026.8.26.0100</a>
+    <div class="row">
+        <div class="col-12 col-md-4">
+            <div class="resLabel">ÓRGÃO JULGADOR</div>
+            <div class="resValue">4ª Câmara de Direito Privado</div>
+        </div>
+        <div class="col-12 col-md-4">
+            <div class="resLabel">DATA DO JULGAMENTO</div>
+            <div class="resValue">31/05/2026</div>
+        </div>
+        <div class="col-12 col-md-4">
+            <div class="resLabel">DATA DA PUBLICAÇÃO</div>
+            <div class="resValue">02/06/2026</div>
+        </div>
+    </div>
+    <div class="row">
+        <div class="col-12 col-md-4">
+            <div class="resLabel">MAGISTRADA</div>
+            <div class="resValue">Maria Aparecida</div>
+        </div>
+    </div>
+    <div class="row">
+        <div class="col-12">
+            <div class="resLabel">EMENTA</div>
+            <div class="resValue">Apelação. Recurso provido.</div>
+        </div>
+    </div>
+</div>
+</body></html>
+"""
+
+# Estilo TJRJ: campos em div.col, label RELATOR, EMENTA presente.
+TJRJ_CARD_HTML = """
+<html><body>
+<div class="resultadoItem">
+    <a class="numero-processo">0012345-67.2025.8.19.0001</a>
+    <div class="row">
+        <div class="col">
+            <div class="resLabel">ÓRGÃO JULGADOR</div>
+            <div class="resValue">Quinta Câmara Cível</div>
+        </div>
+        <div class="col">
+            <div class="resLabel">DATA DO JULGAMENTO</div>
+            <div class="resValue">10/04/2025</div>
+        </div>
+        <div class="col">
+            <div class="resLabel">DATA DA PUBLICAÇÃO</div>
+            <div class="resValue">14/04/2025</div>
+        </div>
+    </div>
+    <div class="row">
+        <div class="col">
+            <div class="resLabel">RELATOR</div>
+            <div class="resValue">Des. Carlos Pereira</div>
+        </div>
+        <div class="col">
+            <div class="resLabel">EMENTA</div>
+            <div class="resValue">Negado provimento ao recurso.</div>
+        </div>
+    </div>
+</div>
+</body></html>
+"""
+
+
+def test_extract_field_accepts_aliases():
+    soup = BeautifulSoup(TJSP_CARD_HTML, "html.parser")
+    card = soup.select_one("div.resultadoItem")
+    # MAGISTRADA é alias de relator; o primeiro label que casar vence
+    assert extract_field(card, "RELATOR", "RELATORA", "MAGISTRADA", "MAGISTRADO") == "Maria Aparecida"
+
+
+def test_extract_field_returns_empty_when_no_label_matches():
+    soup = BeautifulSoup(TJRJ_CARD_HTML, "html.parser")
+    card = soup.select_one("div.resultadoItem")
+    assert extract_field(card, "INEXISTENTE") == ""
+
+
+def test_parse_tjsc_style_all_fields():
+    """Estilo TJSC (div.row, RELATOR, EMENTA) — todos os 6 campos preenchidos."""
+    items = parse_results_page(TWO_CARDS_HTML)
+    second = items[1]
+    assert second["processo"] == "0009876-54.2018.8.24.0002"
+    assert second["orgao_julgador"] == "Segunda Câmara de Direito Civil"
+    assert second["data_julgamento"] == "05/03/2018"
+    assert second["data_publicacao"] == "20/03/2018"
+    assert second["relator"] == "Dra. Maria Santos"
+    assert second["decisao"] == "Apelação desprovida."
+
+
+def test_parse_tjsp_style_col_wrappers_and_magistrada():
+    """Estilo TJSP: campos em col-12 col-md-4, relator via MAGISTRADA."""
+    items = parse_results_page(TJSP_CARD_HTML)
+    assert len(items) == 1
+    item = items[0]
+    assert item["processo"] == "1001234-56.2026.8.26.0100"
+    assert item["data_julgamento"] == "31/05/2026"
+    assert item["data_publicacao"] == "02/06/2026"
+    assert item["relator"] == "Maria Aparecida"
+    assert item["decisao"] == "Apelação. Recurso provido."
+
+
+def test_parse_tjrj_style_all_fields():
+    """Estilo TJRJ: campos em div.col, RELATOR, EMENTA — todos os 6 campos."""
+    items = parse_results_page(TJRJ_CARD_HTML)
+    assert len(items) == 1
+    item = items[0]
+    assert item["processo"] == "0012345-67.2025.8.19.0001"
+    assert item["orgao_julgador"] == "Quinta Câmara Cível"
+    assert item["data_julgamento"] == "10/04/2025"
+    assert item["data_publicacao"] == "14/04/2025"
+    assert item["relator"] == "Des. Carlos Pereira"
+    assert item["decisao"] == "Negado provimento ao recurso."
+
+
 def test_scrape_month_retry_sleep_called():
     call_counter = [0]
 
-    def side_effect(session, page, date_start, date_end):
+    def side_effect(session, page, date_start, date_end, tribunal="tjsc"):
         call_counter[0] += 1
         if call_counter[0] == 1:
             raise requests.exceptions.Timeout("timeout")
@@ -261,3 +395,94 @@ def test_scrape_month_retry_sleep_called():
 
     # Should have slept 2^0=1 before the first retry
     assert 1 in sleep_calls
+
+
+# --- US-102: registro de tribunais + scraping parametrizado por tribunal ---
+
+
+def test_urls_tjsp_uses_tjsp_base():
+    listar, paginar = _urls("tjsp")
+    assert "eproc1g.tjsp.jus.br" in listar
+    assert "eproc1g.tjsp.jus.br" in paginar
+    assert "jurisprudencia@jurisprudencia/listar_resultados" in listar
+    assert "jurisprudencia@jurisprudencia/ajax_paginar_resultado" in paginar
+
+
+def test_urls_tjsc_default_base():
+    listar, paginar = _urls("tjsc")
+    assert "eproc1g.tjsc.jus.br" in listar
+    assert "eproc1g.tjsc.jus.br" in paginar
+
+
+def test_urls_invalid_tribunal_raises():
+    with pytest.raises(ValueError):
+        _urls("tjxx")
+
+
+def test_tribunais_registry_has_three_courts():
+    assert TRIBUNAIS["tjsc"]["base"] == "https://eproc1g.tjsc.jus.br"
+    assert TRIBUNAIS["tjsp"]["base"] == "https://eproc1g.tjsp.jus.br"
+    assert TRIBUNAIS["tjrj"]["base"] == "https://eproc1g.tjrj.jus.br"
+
+
+def test_fetch_page_invalid_tribunal_raises():
+    session = requests.Session()
+    with pytest.raises(ValueError):
+        fetch_page(session, 1, "", "", tribunal="invalido")
+
+
+def test_fetch_page_uses_tribunal_url_and_headers():
+    session_mock = patch("requests.Session").start()
+    try:
+        sess = requests.Session()
+        resp = sess.post.return_value
+        resp.text = EMPTY
+        fetch_page(sess, 1, "01/01/2026", "31/01/2026", tribunal="tjsp")
+        args, kwargs = sess.post.call_args
+        url = args[0]
+        assert "eproc1g.tjsp.jus.br" in url
+        headers = kwargs["headers"]
+        assert headers["Origin"] == "https://eproc1g.tjsp.jus.br"
+        assert "eproc1g.tjsp.jus.br" in headers["Referer"]
+    finally:
+        patch.stopall()
+
+
+def test_scrape_month_injects_tribunal_into_records():
+    responses = {1: SINGLE_CARD_HTML}
+
+    def side_effect(session, page, date_start, date_end, tribunal="tjsc"):
+        return responses.get(page, EMPTY)
+
+    with patch("screping.scraper.fetch_page", side_effect=side_effect), \
+         patch("time.sleep"):
+        records = scrape_month(2026, 1, sleep=0, tribunal="tjsp")
+
+    assert len(records) == 1
+    assert all(r["tribunal"] == "tjsp" for r in records)
+
+
+def test_scrape_month_default_tribunal_is_tjsc():
+    responses = {1: SINGLE_CARD_HTML}
+
+    def side_effect(session, page, date_start, date_end, tribunal="tjsc"):
+        return responses.get(page, EMPTY)
+
+    with patch("screping.scraper.fetch_page", side_effect=side_effect), \
+         patch("time.sleep"):
+        records = scrape_month(2018, 1, sleep=0)
+
+    assert records[0]["tribunal"] == "tjsc"
+
+
+def test_scrape_month_passes_tribunal_to_fetch_page():
+    with patch("screping.scraper.fetch_page", return_value=EMPTY) as mock_fetch, \
+         patch("time.sleep"):
+        scrape_month(2026, 1, sleep=0, tribunal="tjsp")
+    _, kwargs = mock_fetch.call_args
+    assert kwargs.get("tribunal") == "tjsp"
+
+
+def test_scrape_month_invalid_tribunal_raises():
+    with pytest.raises(ValueError):
+        scrape_month(2026, 1, sleep=0, tribunal="invalido")

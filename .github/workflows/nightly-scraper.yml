@@ -10,6 +10,10 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    strategy:
+      max-parallel: 1  # evita commits concorrentes no mesmo checkpoint.json
+      matrix:
+        tribunal: [tjsc, tjsp]
 
     steps:
       - name: Checkout
@@ -36,6 +40,7 @@ jobs:
           GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
           BQ_DATASET_ID: ${{ secrets.BQ_DATASET_ID }}
           BQ_TABLE_ID: ${{ secrets.BQ_TABLE_ID }}
+          TRIBUNAL: ${{ matrix.tribunal }}
         run: python screping/main.py
 
       - name: Commit checkpoint
@@ -43,4 +48,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git config user.name "github-actions[bot]"
           git add checkpoint.json
-          git diff --staged --quiet || (git commit -m "chore: update checkpoint [skip ci]" && git push)
+          git diff --staged --quiet && exit 0
+          git commit -m "chore: update checkpoint ${{ matrix.tribunal }} [skip ci]"
+          git pull --rebase origin ${{ github.ref_name }}
+          git push

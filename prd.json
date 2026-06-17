@@ -1,84 +1,101 @@
 {
-  "project": "Scraper TJSC — Coleta Histórica em Lotes Noturnos",
-  "branchName": "ralph/scraper-batch-nightly",
-  "description": "Refatorar o scraper do TJSC para coletar jurisprudência histórica (2018 → presente) em lotes mensais noturnos via GitHub Actions. Cada execução processa 1 mês, gera embeddings com multilingual-e5-base e insere diretamente no BigQuery processos_v2. Progresso salvo em checkpoint.json commitado no repo.",
+  "project": "Scraper Multi-Tribunal — Adicionar TJSP (últimos 2 anos)",
+  "branchName": "ralph/multi-tribunal-tjsp",
+  "description": "Generalizar o scraper de jurisprudência do eproc (hoje só TJSC) para multi-tribunal e coletar o TJSP dos últimos 2 anos (jan/2024 → presente). Fase 0 (spike) já comprovou que TJSP e TJRJ rodam a MESMA implementação eproc do TJSC (rota acao=jurisprudencia@jurisprudencia, markup div.resultadoItem + .resLabel/.resValue), então o scraper é ~90% reaproveitável. O parser atual só precisa de dois ajustes (validados em protótipo): (1) iterar .resLabel direto em vez de só div.row, porque TJSP/TJRJ embrulham vários campos em <div class='col-12 col-md-4'>; (2) aceitar aliases de relator (MAGISTRADA/MAGISTRADO). Cada registro passa a carregar o campo 'tribunal'. Embedding de produção é intfloat/multilingual-e5-base (não usado nesta fase — a Fase 1 só coleta dados BRUTOS em processos_raw, sem embedding).",
   "userStories": [
     {
-      "id": "US-001",
-      "title": "Setup: requirements.txt e testes de parsing HTML",
-      "description": "Criar requirements.txt com todas as dependências e escrever testes para a lógica de parsing HTML que já existe em main.py.",
+      "id": "US-101",
+      "title": "Parser robusto: extrair campos por .resLabel (não por div.row) + aliases de relator",
+      "description": "Refatorar extract_field para encontrar campos independente do wrapper HTML (div.row no TJSC, div.col-* no TJSP/TJRJ) e aceitar múltiplos labels para o mesmo campo (aliases de relator). parse_results_page continua retornando os 6 campos para os 3 tribunais.",
       "priority": 1,
       "passes": true,
       "acceptanceCriteria": [
-        "requirements.txt criado com: requests, beautifulsoup4, sentence-transformers, google-cloud-bigquery, torch, numpy, pytest",
-        "Criar tests/__init__.py e tests/test_scraper.py",
-        "test_scraper.py testa parse_results_page() com HTML mockado contendo 2 cards de resultadoItem — verifica campos processo, orgao_julgador, data_julgamento, data_publicacao, relator, decisao",
-        "test_scraper.py testa parse_results_page() com HTML vazio — deve retornar lista vazia",
-        "test_scraper.py testa extract_processo() com card que tem a tag <a class='numero-processo'> e com card que não tem (fallback para campo PROCESSO)",
-        "pytest tests/ -v passa sem erros"
+        "extract_field(card, *labels) em screping/scraper.py aceita um ou mais labels e retorna o valor do primeiro .resLabel cujo texto (upper, strip) casa com algum dos labels; vazio se nenhum casar",
+        "A busca do valor usa o .resValue par: primeiro lab.find_next_sibling(class_='resValue'); se None, fallback para lab.parent e nele .select_one('.resValue')",
+        "extract_field NÃO depende mais de card.select('div.row') — itera card.select('.resLabel') direto",
+        "parse_results_page extrai relator com aliases: extract_field(card, 'RELATOR', 'RELATORA', 'MAGISTRADA', 'MAGISTRADO')",
+        "parse_results_page mantém decisao = extract_field(card, 'DECISÃO') or extract_field(card, 'EMENTA')",
+        "tests/test_scraper.py: fixture HTML mockado estilo TJSC (campos em div.row, label RELATOR, campo EMENTA) — todos os 6 campos preenchidos",
+        "tests/test_scraper.py: fixture HTML mockado estilo TJSP (campos em <div class='col-12 col-md-4'> com .resLabel/.resValue, label MAGISTRADA, labels DATA DO JULGAMENTO e DATA DA PUBLICAÇÃO) — verifica que data_julgamento, data_publicacao e relator (via MAGISTRADA) são preenchidos",
+        "tests/test_scraper.py: fixture HTML mockado estilo TJRJ (campos em div.col, label RELATOR, EMENTA presente) — todos os 6 campos preenchidos",
+        "Sem regressão: os testes existentes de parse_results_page/extract_processo continuam passando",
+        "pytest tests/ -v passa"
       ],
-      "notes": "A lógica de parsing já existe em screping/main.py — extrair para screping/scraper.py mantendo as mesmas funções. Os testes devem usar HTML mockado (string literal), sem fazer requests reais. Ver CLAUDE.md para estrutura de arquivos esperada."
+      "notes": "Protótipo validado na Fase 0 (2026-06-16): com este fix, TJSP e TJRJ extraem 100/100 em todos os campos; TJSC sem regressão. Markup real do TJSP/TJRJ para data: <div class='col-12 col-md-4'><div class='resLabel'>DATA DO JULGAMENTO</div><div class='resValue'>31/05/2026</div></div>. NÃO usar regex no texto da decisão — a data está no card. Manter extract_processo como está (prioriza a.numero-processo, fallback split()[0] do campo PROCESSO; isso já limpa o lixo tipo 'ProCom - Procedimento' que o TJSP anexa)."
     },
     {
-      "id": "US-002",
-      "title": "Scraping por faixa de data com checkpoint e retry",
-      "description": "Refatorar o scraper para aceitar faixa de datas (mês/ano), adicionar retry com backoff e criar sistema de checkpoint em JSON.",
+      "id": "US-102",
+      "title": "Registro de tribunais e scraping parametrizado por tribunal",
+      "description": "Introduzir um registro TRIBUNAIS com a base eproc de cada tribunal e parametrizar fetch_page/scrape_month pelo tribunal. Cada registro coletado passa a carregar o campo 'tribunal'.",
       "priority": 2,
       "passes": true,
       "acceptanceCriteria": [
-        "Criar screping/scraper.py com função scrape_month(year: int, month: int, sleep: float = 1.0) -> list[dict] que raspa todas as páginas de um mês",
-        "fetch_page() passa dtDecisaoInicio e dtDecisaoFim no payload (ex: '01/01/2018' e '31/01/2018' para janeiro 2018)",
-        "Se página retorna 0 itens por 3 páginas consecutivas: encerra o mês (não há mais dados)",
-        "Cada página tem retry de até 3 tentativas com sleep 2^attempt segundos entre tentativas",
-        "Página que falha após 3 tentativas é registrada como failed_page e pulada (não aborta o mês inteiro)",
-        "Criar screping/checkpoint.py com funções load_checkpoint() e save_checkpoint(data) que lêem/gravam checkpoint.json na raiz do repo",
-        "checkpoint.json tem campos: next_month (str YYYY-MM), completed_months (list), failed_pages (list)",
-        "Se checkpoint.json não existe, load_checkpoint() retorna next_month='2018-01'",
-        "Criar tests/test_scraper.py (ou adicionar a ele) testes para scrape_month() com requests mockado",
-        "Criar tests/test_checkpoint.py com testes de load/save (usando tmp_path do pytest)",
+        "screping/scraper.py define TRIBUNAIS = {'tjsc': {'base': 'https://eproc1g.tjsc.jus.br'}, 'tjsp': {'base': 'https://eproc1g.tjsp.jus.br'}, 'tjrj': {'base': 'https://eproc1g.tjrj.jus.br'}}",
+        "Função auxiliar (ex: _urls(tribunal)) deriva LISTAR_RESULTADOS e PAGINAR a partir do base do tribunal, mantendo o sufixo de rota acao=jurisprudencia@jurisprudencia/...",
+        "Headers por requisição derivam Origin e Referer do base do tribunal (não mais constantes globais fixas no TJSC)",
+        "fetch_page(session, page, date_start='', date_end='', tribunal='tjsc') usa a URL PAGINAR do tribunal informado",
+        "scrape_month(year, month, sleep=1.0, failed_pages=None, tribunal='tjsc') usa as URLs do tribunal e injeta record['tribunal']=tribunal em cada item retornado",
+        "tribunal inválido (não presente em TRIBUNAIS) levanta ValueError com mensagem clara",
+        "Default tribunal='tjsc' preserva compatibilidade com o comportamento atual",
+        "tests/test_scraper.py: scrape_month(..., tribunal='tjsp') com fetch_page mockado (patch('screping.scraper.fetch_page')) e time.sleep mockado — verifica que todos os records têm tribunal='tjsp'",
+        "tests/test_scraper.py: teste de _urls('tjsp') retorna URL contendo 'eproc1g.tjsp.jus.br'",
         "pytest tests/ -v passa"
       ],
-      "notes": "Formato das datas no payload TJSC: dd/mm/YYYY (ex: '01/01/2018'). Ver payload original em screping/main.py — os campos dtDecisaoInicio e dtDecisaoFim já existem mas estão vazios. O campo selOrdenacao='1' mantém. Usar calendar.monthrange para calcular último dia do mês. checkpoint.json fica na raiz do repo (um nível acima de screping/)."
+      "notes": "Padrão de teste já usado no repo: patch('screping.scraper.fetch_page') + patch('time.sleep'). O payload do POST (fetch_page) é idêntico entre os tribunais — só muda a URL e os headers Origin/Referer. PAGE_SIZE=100 permanece. Não fazer requests reais nos testes."
     },
     {
-      "id": "US-003",
-      "title": "Embedding e inserção direta no BigQuery",
-      "description": "Criar módulos para geração de embeddings com multilingual-e5-base e inserção dos registros com embeddings no BigQuery processos_v2.",
+      "id": "US-103",
+      "title": "Checkpoint por tribunal + piso de data configurável (STOP_MONTH)",
+      "description": "Tornar o checkpoint.json indexado por tribunal e permitir um mês-piso configurável por tribunal, para coletar só os últimos 2 anos do TJSP (parar em 2024-01).",
       "priority": 3,
       "passes": true,
       "acceptanceCriteria": [
-        "Criar screping/embedder.py com função generate_embeddings(records: list[dict]) -> list[dict] que adiciona campo 'embedding' (list[float], 768 dims) em cada record",
-        "Prefixo de encoding: f\"passage: {record['decisao'] or ''}\" — igual ao reindex.py do app",
-        "normalize_embeddings=True, batch_size=256",
-        "Criar screping/bq_writer.py com função insert_records(records: list[dict], project_id: str, dataset_id: str, table_id: str) -> int que retorna número de erros",
-        "ID de cada registro: hashlib.sha256(f\"{processo}|{data_julgamento}\".encode()).hexdigest()",
-        "Inserção em chunks de 256 com retry 3x (sleep 5s entre tentativas) — igual ao padrão de reindex.py",
-        "Criar screping/main.py novo que orquestra: load_checkpoint → scrape_month → generate_embeddings → insert_records → save_checkpoint",
-        "main.py para se next_month > mês atual (coleta completa)",
-        "Criar tests/test_embedder.py mockando SentenceTransformer.encode — verifica que prefixo 'passage: ' é aplicado e que embedding é adicionado ao dict",
-        "Criar tests/test_bq_writer.py mockando google.cloud.bigquery.Client — verifica chunks de 256 e geração do ID",
+        "checkpoint.json passa a ter estrutura por tribunal: {'tjsc': {'next_month','completed_months','failed_pages'}, 'tjsp': {...}}",
+        "load_checkpoint(tribunal, path=CHECKPOINT_PATH) retorna o dict daquele tribunal; se o arquivo não existe ou o tribunal não está presente, retorna default com next_month=mês atual, completed_months=[], failed_pages=[]",
+        "save_checkpoint(tribunal, data, path=CHECKPOINT_PATH) faz merge: lê o arquivo (se existir), atualiza só a chave do tribunal e regrava — não apaga os demais tribunais",
+        "Migração: se o arquivo estiver no formato antigo (flat, com 'next_month' no topo), load_checkpoint o interpreta como {'tjsc': <conteúdo antigo>}",
+        "main.py lê env TRIBUNAL (default 'tjsc') e env STOP_MONTH (default por tribunal via dict DEFAULT_STOP={'tjsc':'2018-01','tjsp':'2024-01','tjrj':'2024-01'})",
+        "main.py para a coleta quando next_month < STOP_MONTH (comparando datas YYYY-MM), com mensagem 'Coleta completa para {tribunal} — atingiu {STOP_MONTH}.'",
+        "main.py passa tribunal para scrape_month e usa load_checkpoint(tribunal)/save_checkpoint(tribunal, ...)",
+        "tests/test_checkpoint.py: load/save por tribunal com tmp_path — salvar 'tjsp' não apaga 'tjsc'",
+        "tests/test_checkpoint.py: migração do formato flat antigo para {'tjsc': ...}",
         "pytest tests/ -v passa"
       ],
-      "notes": "Variáveis de ambiente usadas: GCP_PROJECT_ID, BQ_DATASET_ID, BQ_TABLE_ID (default 'processos_v2'). Para mockar SentenceTransformer: unittest.mock.patch('screping.embedder.SentenceTransformer'). Para mockar BigQuery: patch('screping.bq_writer.bigquery.Client'). Ver schema completo no CLAUDE.md."
+      "notes": "Janela 'últimos 2 anos' a partir de jun/2026 => STOP_MONTH do TJSP = '2024-01' (coleta jan/2024 em diante). O loop coleta do mês atual para trás (como hoje), 1 mês por execução. Comparar meses convertendo para datetime.date(ano, mes, 1). Manter CHECKPOINT_PATH = Path(__file__).parent.parent / 'checkpoint.json' (raiz do repo)."
     },
     {
-      "id": "US-004",
-      "title": "GitHub Actions workflow com cron noturno",
-      "description": "Criar workflow que executa o scraper todo dia às 3h BRT (6h UTC), autentica no GCP via Service Account Key e commita o checkpoint.json atualizado.",
+      "id": "US-104",
+      "title": "Inserir coluna 'tribunal' no BigQuery processos_raw",
+      "description": "bq_writer passa a gravar o campo 'tribunal' em cada linha; documentar a migração de schema da tabela processos_raw (ADD COLUMN + backfill dos registros TJSC existentes).",
       "priority": 4,
       "passes": true,
       "acceptanceCriteria": [
-        "Criar .github/workflows/nightly-scraper.yml",
-        "Trigger: schedule cron '0 6 * * *' (3h BRT) + workflow_dispatch (trigger manual)",
-        "Usa ubuntu-latest, Python 3.12",
-        "Autentica no GCP: escreve o conteúdo do secret GCP_SA_KEY em /tmp/sa-key.json e seta GOOGLE_APPLICATION_CREDENTIALS=/tmp/sa-key.json",
-        "Instala dependências via pip install -r requirements.txt com cache de pip",
-        "Roda: python screping/main.py com variáveis de ambiente GCP_PROJECT_ID, BQ_DATASET_ID, BQ_TABLE_ID vindas de GitHub Secrets/Variables",
-        "Após execução: git config user.email/name, git add checkpoint.json, git diff --staged --quiet || git commit -m 'chore: update checkpoint [skip ci]' && git push",
-        "Se main.py falha (exit code != 0), o step de push não executa mas o job não esconde o erro (continue-on-error: false)",
-        "Adicionar seção README.md (ou criar) documentando: quais GitHub Secrets configurar (GCP_SA_KEY, GCP_PROJECT_ID, BQ_DATASET_ID, BQ_TABLE_ID) e como criar o Service Account com permissão roles/bigquery.dataEditor"
+        "insert_records inclui row['tribunal'] = record['tribunal'] (mantém os demais campos)",
+        "ID continua hashlib.sha256(f\"{processo}|{data_julgamento}\".encode()).hexdigest() — o número CNJ já discrimina o tribunal (ex.: .8.26. = SP, .8.24. = SC, .8.19. = RJ), sem risco de colisão entre tribunais",
+        "Se record não tiver 'tribunal', usar default 'tjsc' (compatibilidade com chamadas antigas)",
+        "tests/test_bq_writer.py: mock de bigquery.Client verifica que as rows enviadas contêm o campo 'tribunal' e o 'id' SHA-256 correto",
+        "docs/migracao-tribunal.md (ou seção no README.md) documenta o SQL de migração, a ser executado MANUALMENTE uma vez antes da primeira coleta TJSP: ALTER TABLE processos_raw ADD COLUMN tribunal STRING; seguido de UPDATE processos_raw SET tribunal='tjsc' WHERE tribunal IS NULL;",
+        "O texto deixa explícito que o ALTER/UPDATE é manual (Ralph NÃO deve executar comandos BigQuery destrutivos/de schema)",
+        "pytest tests/ -v passa"
       ],
-      "notes": "O secret GCP_SA_KEY contém o JSON completo da chave do Service Account (não o path, o conteúdo). No workflow: echo '${{ secrets.GCP_SA_KEY }}' > /tmp/sa-key.json. Usar [skip ci] na mensagem do commit para não triggerar o próprio workflow. O GCP_PROJECT_ID pode ser GitHub Variable (não secret) pois não é sensível: rag-juridico-492317."
+      "notes": "Streaming insert exige que a coluna já exista na tabela antes da inserção — por isso o ALTER é pré-requisito manual. Padrão de mock já usado: patch('screping.bq_writer.bigquery.Client'). Não executar BigQuery real em teste nem no Ralph."
+    },
+    {
+      "id": "US-105",
+      "title": "GitHub Actions: coletar TJSP em paralelo ao TJSC (matriz)",
+      "description": "Atualizar o workflow noturno para rodar o scraper por tribunal via matriz, passando TRIBUNAL, e commitando o checkpoint compartilhado com segurança.",
+      "priority": 5,
+      "passes": true,
+      "acceptanceCriteria": [
+        ".github/workflows/nightly-scraper.yml usa strategy.matrix.tribunal: [tjsc, tjsp]",
+        "max-parallel: 1 (evita commits concorrentes no mesmo checkpoint.json)",
+        "O step do scraper recebe env TRIBUNAL: ${{ matrix.tribunal }} (o STOP_MONTH vem do DEFAULT_STOP no código; TJSP para em 2024-01)",
+        "O step de commit faz git pull --rebase antes do push (a matriz sequencial atualiza o mesmo arquivo) e mantém '[skip ci]' na mensagem",
+        "Mantém workflow_dispatch e o cron '0 6 * * *'",
+        "README.md atualizado: novo tribunal TJSP, variável TRIBUNAL e nota sobre o pré-requisito de schema (US-104)",
+        "Não há teste pytest para o workflow; o critério é o YAML válido e a documentação atualizada"
+      ],
+      "notes": "Como a matriz roda sequencial (max-parallel:1) e ambos os jobs commitam checkpoint.json, o git pull --rebase antes do push evita rejeição por non-fast-forward. Alternativa aceitável: um job único que itera sobre os tribunais. Secrets/Variables já existentes: GCP_SA_KEY, GCP_PROJECT_ID (Variable), BQ_DATASET_ID, BQ_TABLE_ID (=processos_raw)."
     }
   ]
 }

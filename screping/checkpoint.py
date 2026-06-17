@@ -18,13 +18,29 @@ def _default() -> dict:
     }
 
 
-def load_checkpoint(path: Path = CHECKPOINT_PATH) -> dict:
+def _load_all(path: Path) -> dict:
+    """Lê o arquivo inteiro como dict indexado por tribunal.
+
+    Migra o formato flat antigo (com 'next_month' no topo) para {'tjsc': <conteúdo>}.
+    """
     if not Path(path).exists():
-        return _default()
+        return {}
     with open(path, encoding="utf-8") as f:
-        return json.load(f)
+        data = json.load(f)
+    if "next_month" in data:
+        return {"tjsc": data}
+    return data
 
 
-def save_checkpoint(data: dict, path: Path = CHECKPOINT_PATH) -> None:
+def load_checkpoint(tribunal: str, path: Path = CHECKPOINT_PATH) -> dict:
+    data = _load_all(path)
+    if tribunal not in data:
+        return _default()
+    return data[tribunal]
+
+
+def save_checkpoint(tribunal: str, data: dict, path: Path = CHECKPOINT_PATH) -> None:
+    all_data = _load_all(path)
+    all_data[tribunal] = data
     with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+        json.dump(all_data, f, indent=2, ensure_ascii=False)

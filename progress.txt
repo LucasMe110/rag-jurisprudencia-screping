@@ -1,75 +1,84 @@
 # Ralph Progress Log
-Started: 2026-06-07
+Started: 2026-06-16 (Fase 1 — Multi-Tribunal / TJSP)
+Histórico da run anterior (scraper TJSC, US-001..US-004): archive/2026-06-16-scraper-batch-nightly/progress.txt
 ---
 
 ## Codebase Patterns
 - Scraper usa requests.Session com headers HEADERS definidos no topo do módulo
 - Parsing HTML usa BeautifulSoup com seletor div.resultadoItem para cada card
-- Payload do TJSC usa campos hdnTotalPaginas e hdnPaginaAtual para paginação
-- Variáveis de ambiente GCP: GCP_PROJECT_ID, BQ_DATASET_ID, BQ_TABLE_ID
-- Modelo de embedding: intfloat/multilingual-e5-base com prefixo "passage: {text}"
-- BigQuery insert: chunks de 256 com retry 3x (padrão de reindex.py no app principal)
-- ID de registro: SHA-256 de "{processo}|{data_julgamento}"
+- Payload do POST (fetch_page) é idêntico entre tribunais — só mudam a URL (base eproc) e os headers Origin/Referer
+- Campos vêm em pares .resLabel / .resValue; no TJSC ficam em div.row, no TJSP/TJRJ vários ficam em <div class="col-12 col-md-4"> — por isso o parser deve iterar .resLabel direto (não só div.row)
+- extract_processo usa a.numero-processo como prioridade, fallback para campo PROCESSO (split()[0]) — já limpa lixo tipo "ProCom - Procedimento" do TJSP
+- Relator: label varia — RELATOR/RELATORA (TJSC, TJRJ) e MAGISTRADA/MAGISTRADO (TJSP)
+- Variáveis de ambiente GCP: GCP_PROJECT_ID, BQ_DATASET_ID, BQ_TABLE_ID (=processos_raw nesta fase, dados BRUTOS sem embedding)
+- ID de registro: SHA-256 de "{processo}|{data_julgamento}" — número CNJ já discrimina o tribunal (.8.26.=SP, .8.24.=SC, .8.19.=RJ)
+- BigQuery insert: chunks de 256 com retry 3x; mock em teste: patch("screping.bq_writer.bigquery.Client")
 - checkpoint.json fica na raiz do repo (não dentro de screping/)
-- HTML cards usam div.resLabel e div.resValue (não span) para campos
-- extract_processo usa a.numero-processo como prioridade, fallback para campo PROCESSO (split()[0])
-- Usar uv para criar .venv e instalar deps: `uv venv .venv && uv pip install ... --python .venv/bin/python`
+- Usar uv para venv/deps: `uv venv .venv && uv pip install -r requirements.txt --python .venv/bin/python` (não há pip/pip3 no sistema)
 - scrape_month aceita failed_pages: list | None = None para coletar falhas sem alterar tipo de retorno
-- Retry usa time.sleep(2**attempt) onde attempt ∈ {0,1} (apenas antes da 2ª e 3ª tentativa)
-- 3 páginas consecutivas sem resultado (ou com falha) encerram o mês — failed pages contam como consecutivas
-- patch("screping.scraper.fetch_page") + patch("time.sleep") é o padrão para testes de scrape_month
+- Padrão de teste de scrape_month: patch("screping.scraper.fetch_page") + patch("time.sleep"); sleep=0 evita lentidão
+- 3 páginas consecutivas sem resultado (ou com falha) encerram o mês
+- Tribunais drop-in confirmados na Fase 0: TJSC, TJSP (eproc1g.tjsp.jus.br), TJRJ (eproc1g.tjrj.jus.br). TJRS/TJMG/etc usam outra implementação eproc (lançam exceção)
+- Embedding de produção (fora desta fase): intfloat/multilingual-e5-base, prefixo "passage: {text}"
 ---
 
-## 2026-06-07 - US-001
-- Criado requirements.txt com: requests, beautifulsoup4, sentence-transformers, google-cloud-bigquery, torch, numpy, pytest
-- Criado screping/__init__.py (torna screping um pacote Python)
-- Criado screping/scraper.py com parse_results_page(), extract_processo(), extract_field(), fetch_page()
-- Criado tests/__init__.py e tests/test_scraper.py com 5 testes usando HTML mockado
-- Todos os testes passam: pytest tests/test_scraper.py -v (5 passed)
-- **Learnings for future iterations:**
-  - Não há pip/pip3 no sistema — usar `uv pip install` com `--python .venv/bin/python`
-  - HTML real usa div.resLabel e div.resValue (não span); seletor .resLabel/.resValue funciona para ambos
-  - O campo a.numero-processo nem sempre aparece nos cards; o fallback para PROCESSO é essencial
-  - screping/ precisa de __init__.py para ser importável como módulo nos testes
+## 2026-06-16 - US-101
+- Refatorado extract_field(card, *labels): itera card.select(".resLabel") direto (não mais div.row); aceita N labels; .resValue par via find_next_sibling, fallback lab.parent.select_one(".resValue")
+- parse_results_page: relator com aliases (RELATOR/RELATORA/MAGISTRADA/MAGISTRADO); decisao = DECISÃO or EMENTA
+- Arquivos: screping/scraper.py, tests/test_scraper.py (fixtures TJSC/TJSP/TJRJ + testes de alias)
+- **Aprendizados:**
+  - extract_field agora é variádico (*labels) — assinatura antiga de 1 label continua funcionando posicionalmente
+  - find_next_sibling(class_="resValue") cobre TJSC (div.row) e TJSP/TJRJ (col-12 col-md-4) pois label/value são irmãos no mesmo wrapper
+  - Pré-existentes FALHANDO antes desta story (fora do escopo US-101): tests/test_checkpoint.py::test_load_checkpoint_missing_file (será resolvido na US-103) e tests/test_embedder.py::test_generate_embeddings_uses_correct_encode_params (embedder fora desta fase). Verificado com git stash que falham sem minhas mudanças.
+  - Suite scraper: 17 passed; full: 28 passed / 2 pré-existentes failed
 ---
 
-## 2026-06-07 - US-002
-- Criado screping/checkpoint.py com load_checkpoint() e save_checkpoint(data, path)
-- Adicionado scrape_month() em screping/scraper.py com retry 3x + backoff + failed_pages tracking
-- Adicionados imports calendar e time no topo de scraper.py
-- Criado tests/test_checkpoint.py com 4 testes usando tmp_path do pytest
-- Adicionados 7 testes de scrape_month em tests/test_scraper.py
-- 16 testes passando: pytest tests/ -v
-- **Learnings for future iterations:**
-  - scrape_month usa failed_pages: list | None = None para não alterar tipo de retorno (list[dict])
-  - Parâmetro sleep=0 nos testes evita lentidão; time.sleep é patchado para capturar calls de retry
-  - CHECKPOINT_PATH calculado via Path(__file__).parent.parent / "checkpoint.json" (raiz do repo)
-  - load_checkpoint() com arquivo inexistente retorna dict com completed_months=[] e failed_pages=[] frescos
+## 2026-06-16 - US-102
+- Adicionado registro TRIBUNAIS = {tjsc, tjsp, tjrj} com base eproc de cada um
+- _urls(tribunal) deriva (LISTAR_RESULTADOS, PAGINAR) do base; levanta ValueError se tribunal inválido
+- _headers(tribunal) deriva Origin/Referer do base (removidas as constantes globais BASE/LISTAR_RESULTADOS/PAGINAR/HEADERS fixas no TJSC)
+- fetch_page(..., tribunal="tjsc") e scrape_month(..., tribunal="tjsc"); scrape_month injeta record["tribunal"]=tribunal e valida o tribunal cedo via _urls()
+- Arquivos: screping/scraper.py, tests/test_scraper.py
+- **Aprendizados:**
+  - scrape_month chama fetch_page com tribunal como KWARG → os side_effects dos testes existentes precisaram ganhar param tribunal="tjsc" (atualizados 4 side_effects, sem mudar asserts)
+  - Default tribunal="tjsc" em todas as assinaturas preserva 100% da compatibilidade (testes antigos de datas/retry/failed_pages passam sem mudança de chamada)
+  - Validação de tribunal centralizada em _urls() — fetch_page e scrape_month reaproveitam, evitando duplicar a checagem
+  - main.py NÃO referenciava as constantes removidas (confirmado por grep) — sem regressão fora do scraper
+  - Suite scraper: 27 passed; full: 38 passed / 2 pré-existentes failed (checkpoint US-103, embedder fora de fase)
 ---
 
-## 2026-06-07 - US-003
-- Criado screping/embedder.py com generate_embeddings() usando intfloat/multilingual-e5-base, prefixo "passage: ", batch_size=256, normalize_embeddings=True
-- Criado screping/bq_writer.py com insert_records() com SHA-256 de ID, chunks de 256, retry 3x com sleep(5), retorna count de erros
-- Reescrito screping/main.py como orquestrador: load_checkpoint → scrape_month → generate_embeddings → insert_records → save_checkpoint
-- main.py para com sys.exit(1) se há erros de inserção, e para com mensagem se next_month > mês atual
-- 25 testes passando: pytest tests/ -v
-- **Learnings for future iterations:**
-  - patch("screping.bq_writer.bigquery.Client") funciona com `from google.cloud import bigquery` (o mock intercepta o atributo no namespace do módulo)
-  - for/else do Python é ideal para retry: o else só roda se o loop exauriu sem break (ou seja, todos os attempts falharam)
-  - numpy e google-cloud-bigquery não estavam instalados no venv — instalar com `uv pip install numpy google-cloud-bigquery sentence-transformers --python .venv/bin/python`
+## 2026-06-16 - US-103
+- checkpoint.py: estrutura indexada por tribunal. load_checkpoint(tribunal, path) e save_checkpoint(tribunal, data, path) com nova assinatura
+- _load_all(path) centraliza leitura + migração: formato flat antigo ({'next_month': ...}) vira {'tjsc': <conteúdo>}
+- save_checkpoint faz merge (lê tudo, atualiza só a chave do tribunal, regrava) — não apaga outros tribunais
+- main.py: env TRIBUNAL (default tjsc), env STOP_MONTH (default via DEFAULT_STOP={'tjsc':'2018-01','tjsp':'2024-01','tjrj':'2024-01'}); para quando next_month < STOP_MONTH
+- Arquivos: screping/checkpoint.py, screping/main.py, tests/test_checkpoint.py
+- **Aprendizados:**
+  - A migração flat→tjsc é detectada por 'next_month' in data no topo do dict; per-tribunal nunca tem essa chave no topo
+  - _default() usa mês atual (não 2018-01) — o teste antigo test_load_checkpoint_missing_file (que esperava 2018-01) era stale e foi reescrito; pré-existente falho resolvido por esta story
+  - Reescrevi test_checkpoint.py inteiro para a nova assinatura (tribunal como 1º arg em load/save)
+  - Restante falho agora: só test_embedder (fora desta fase). Suite checkpoint: 7 passed; full: 42 passed / 1 pré-existente failed (embedder)
 ---
 
-## 2026-06-07 - US-004
-- Criado .github/workflows/nightly-scraper.yml com cron '0 6 * * *' + workflow_dispatch
-- Workflow usa ubuntu-latest + Python 3.12 com cache de pip
-- Autenticação GCP: escreve GCP_SA_KEY em /tmp/sa-key.json, seta GOOGLE_APPLICATION_CREDENTIALS
-- Variáveis: GCP_PROJECT_ID como GitHub Variable (não sensível), BQ_DATASET_ID e BQ_TABLE_ID como Secrets
-- Step de commit do checkpoint: git diff --staged --quiet || (commit + push) — não falha se não há mudanças
-- Se main.py falha, step de commit não executa (sem continue-on-error) e job falha com o erro real
-- Criado README.md com tabela de Secrets/Variables e guia passo a passo para criar Service Account
-- **Learnings for future iterations:**
-  - GCP_PROJECT_ID usa `${{ vars.GCP_PROJECT_ID }}` (Variables), demais usam `${{ secrets.X }}` (Secrets)
-  - `[skip ci]` na mensagem do commit do checkpoint evita loop de trigger do workflow
-  - actions/setup-python@v5 com `cache: 'pip'` reduz tempo de instalação em execuções repetidas
-  - O passo de autenticação cria /tmp/sa-key.json com o conteúdo do JSON do SA Key (não o path)
+## 2026-06-16 - US-104
+- bq_writer.insert_records grava row["tribunal"] = r.get("tribunal", "tjsc") (default tjsc p/ compatibilidade); ID SHA-256 inalterado
+- docs/migracao-tribunal.md: ALTER TABLE ADD COLUMN tribunal STRING + UPDATE SET tribunal='tjsc' WHERE NULL — explicitamente MANUAL (Ralph não executa)
+- Arquivos: screping/bq_writer.py, tests/test_bq_writer.py, docs/migracao-tribunal.md
+- **Aprendizados:**
+  - r.get("tribunal", "tjsc") cobre tanto registros do scraper novo (que já injeta tribunal via US-102) quanto chamadas antigas/legadas sem o campo
+  - Streaming insert exige coluna preexistente → migração de schema é pré-requisito manual, não automatizável no Ralph
+  - Suite bq_writer: 7 passed; full: 44 passed / 1 pré-existente failed (test_embedder, fora desta fase)
+---
+
+## 2026-06-16 - US-105
+- nightly-scraper.yml: strategy.matrix.tribunal [tjsc, tjsp] + max-parallel: 1; step do scraper recebe env TRIBUNAL: ${{ matrix.tribunal }}
+- Commit step: git pull --rebase origin ${{ github.ref_name }} antes do push; mensagem "chore: update checkpoint <tribunal> [skip ci]"; early `exit 0` quando não há diff
+- README.md: título multi-tribunal, tabela de tribunais (base eproc + STOP_MONTH), checkpoint indexado por tribunal, env TRIBUNAL/STOP_MONTH na execução local, nota de pré-requisito de schema linkando docs/migracao-tribunal.md (US-104)
+- Arquivos: .github/workflows/nightly-scraper.yml, README.md, prd.json, progress.txt
+- **Aprendizados:**
+  - max-parallel:1 + git pull --rebase é o que torna seguro dois jobs da matriz commitarem o MESMO checkpoint.json sequencialmente (evita non-fast-forward)
+  - `git diff --staged --quiet && exit 0` separa o caminho "sem mudança" do commit/rebase/push — mais legível que o `|| (... && ...)` anterior
+  - github.ref_name dá o nome da branch atual para o rebase (funciona em cron, dispatch e push)
+  - US-105 não tem teste pytest (critério = YAML válido + docs); validado com `yaml.safe_load`. Suite full inalterada: 44 passed / 1 pré-existente failed (test_embedder, fora desta fase)
+  - TODAS as histórias do PRD (US-101..US-105) agora com passes: true
 ---
