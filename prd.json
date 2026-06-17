@@ -48,7 +48,7 @@
       "title": "Checkpoint por tribunal + piso de data configurável (STOP_MONTH)",
       "description": "Tornar o checkpoint.json indexado por tribunal e permitir um mês-piso configurável por tribunal, para coletar só os últimos 2 anos do TJSP (parar em 2024-01).",
       "priority": 3,
-      "passes": false,
+      "passes": true,
       "acceptanceCriteria": [
         "checkpoint.json passa a ter estrutura por tribunal: {'tjsc': {'next_month','completed_months','failed_pages'}, 'tjsp': {...}}",
         "load_checkpoint(tribunal, path=CHECKPOINT_PATH) retorna o dict daquele tribunal; se o arquivo não existe ou o tribunal não está presente, retorna default com next_month=mês atual, completed_months=[], failed_pages=[]",

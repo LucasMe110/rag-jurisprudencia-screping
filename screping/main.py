@@ -6,19 +6,25 @@ from screping.checkpoint import load_checkpoint, save_checkpoint
 from screping.scraper import scrape_month
 from screping.bq_writer import insert_records
 
+DEFAULT_STOP = {"tjsc": "2018-01", "tjsp": "2024-01", "tjrj": "2024-01"}
+
 
 def main() -> None:
-    checkpoint = load_checkpoint()
+    tribunal = os.environ.get("TRIBUNAL", "tjsc")
+    stop_month = os.environ.get("STOP_MONTH", DEFAULT_STOP.get(tribunal, "2018-01"))
+
+    checkpoint = load_checkpoint(tribunal)
     next_month_str = checkpoint["next_month"]
     year, month = map(int, next_month_str.split("-"))
+    stop_year, stop_month_n = map(int, stop_month.split("-"))
 
-    if datetime.date(year, month, 1) < datetime.date(2018, 1, 1):
-        print("Coleta completa — chegamos em janeiro/2018.")
+    if datetime.date(year, month, 1) < datetime.date(stop_year, stop_month_n, 1):
+        print(f"Coleta completa para {tribunal} — atingiu {stop_month}.")
         return
 
     failed_pages: list = checkpoint.get("failed_pages", [])
-    print(f"Raspando {next_month_str}...")
-    records = scrape_month(year, month, failed_pages=failed_pages)
+    print(f"Raspando {tribunal} {next_month_str}...")
+    records = scrape_month(year, month, failed_pages=failed_pages, tribunal=tribunal)
     print(f"{len(records)} registros coletados.")
 
     if records:
@@ -41,7 +47,7 @@ def main() -> None:
     checkpoint["next_month"] = f"{next_year}-{next_month:02d}"
     checkpoint["failed_pages"] = failed_pages
 
-    save_checkpoint(checkpoint)
+    save_checkpoint(tribunal, checkpoint)
     print(f"Checkpoint atualizado. Próximo mês: {checkpoint['next_month']}")
 
 

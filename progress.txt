@@ -46,3 +46,16 @@ Histórico da run anterior (scraper TJSC, US-001..US-004): archive/2026-06-16-sc
   - main.py NÃO referenciava as constantes removidas (confirmado por grep) — sem regressão fora do scraper
   - Suite scraper: 27 passed; full: 38 passed / 2 pré-existentes failed (checkpoint US-103, embedder fora de fase)
 ---
+
+## 2026-06-16 - US-103
+- checkpoint.py: estrutura indexada por tribunal. load_checkpoint(tribunal, path) e save_checkpoint(tribunal, data, path) com nova assinatura
+- _load_all(path) centraliza leitura + migração: formato flat antigo ({'next_month': ...}) vira {'tjsc': <conteúdo>}
+- save_checkpoint faz merge (lê tudo, atualiza só a chave do tribunal, regrava) — não apaga outros tribunais
+- main.py: env TRIBUNAL (default tjsc), env STOP_MONTH (default via DEFAULT_STOP={'tjsc':'2018-01','tjsp':'2024-01','tjrj':'2024-01'}); para quando next_month < STOP_MONTH
+- Arquivos: screping/checkpoint.py, screping/main.py, tests/test_checkpoint.py
+- **Aprendizados:**
+  - A migração flat→tjsc é detectada por 'next_month' in data no topo do dict; per-tribunal nunca tem essa chave no topo
+  - _default() usa mês atual (não 2018-01) — o teste antigo test_load_checkpoint_missing_file (que esperava 2018-01) era stale e foi reescrito; pré-existente falho resolvido por esta story
+  - Reescrevi test_checkpoint.py inteiro para a nova assinatura (tribunal como 1º arg em load/save)
+  - Restante falho agora: só test_embedder (fora desta fase). Suite checkpoint: 7 passed; full: 42 passed / 1 pré-existente failed (embedder)
+---
